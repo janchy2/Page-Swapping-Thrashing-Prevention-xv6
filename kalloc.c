@@ -24,6 +24,7 @@ struct {
   struct framedesc *framedescs;
   char *frames;
   uint64 NUMFRAMES;
+  uint64 freeframes;
 } kmem;
 
 void
@@ -36,6 +37,7 @@ kinit()
   if(((uint64)PHYSTOP - (uint64)kmem.frames) / PGSIZE < (uint64)kmem.NUMFRAMES) { //ako ima jedan okvir manje zbog zaokruzivanja
       kmem.NUMFRAMES--;
   }
+  kmem.freeframes = 0;
   kmem.framedescs = (framedesc*)end;
   freerange((void*)kmem.frames, (void*)PHYSTOP);
 }
@@ -66,6 +68,7 @@ kfree(void *pa)
   uint64 index = ((uint64)pa - (uint64)kmem.frames) / PGSIZE;
 
   acquire(&kmem.lock);
+  kmem.freeframes++;
   kmem.framedescs[index].pte = 0; //okvir slobodan
   kmem.framedescs[index].referencebits = 0;
   release(&kmem.lock);
@@ -84,6 +87,7 @@ kalloc(void)
       if(!kmem.framedescs[i].pte) {
           r = (char*)kmem.frames + i * PGSIZE;
           kmem.framedescs[i].pte = (uint64*)1; //samo trenutno
+          kmem.freeframes--;
           break;
       }
   }
@@ -93,3 +97,24 @@ kalloc(void)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
 }
+
+framedesc*
+choosevictimframe()
+{
+    uint8 min = 0xff;
+    framedesc *victim = 0;
+    for(uint64 i = 0; i < kmem.NUMFRAMES; i++) {
+        if(*(kmem.framedescs[i].pte) & PTE_U) { //samo korisnicke stranice se izbacuju
+            if(!(*(kmem.framedescs[i].pte) & PTE_D)) { //samo ako je u memoriji
+                if (kmem.framedescs[i].referencebits < min) {
+                    victim = kmem.framedescs + i;
+                    min = kmem.framedescs[i].referencebits;
+                }
+            }
+        }
+    }
+    *(victim->pte) |= PTE_D; //postavimo da je izbacena (ne moze neki drugi proces da je izabere u medjuvremenu)
+    *(victim->pte) &= ~PTE_V; //nije validna
+    return victim;
+}
+

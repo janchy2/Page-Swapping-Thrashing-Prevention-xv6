@@ -65,12 +65,21 @@ static struct disk {
 
 static struct buf* swap_buffer;
 
-uint64 blocksused[2*1024]; //bit vektor za iskoriscenost blokova na disku za zamenu
+uint64 blocksused[64]; //bit vektor za iskoriscenost blokova na disku za zamenu
+//jedna cetvrtina ukupnog broja blokova, jer uvek uzimamo po 4
+struct spinlock bitvectorlock;
+uint64 numoffreeblocks;
+
 
 void
 virtio_disk_init(int id, char * name)
 {
   uint32 status = 0;
+
+  if(id == VIRTIO1_ID) { //inicijalizacija brave za bit vektor blokova na swap disku
+      initlock(&bitvectorlock, "bitvector");
+      numoffreeblocks = 64 * 64; //racunaju se po cetiri
+  }
 
   initlock(&disk[id].vdisk_lock, name);
   disk[id].name = name;
@@ -334,11 +343,6 @@ void write_block(int blockno, uchar data[BSIZE], int busy_wait) {
     b->blockno = blockno;
     memmove(b->data, data, BSIZE);
 
-    int element = blockno / 64;
-    uint64 mask = 1 << (blockno % 64); //s desna na levo u okviru elementa
-
-    blocksused[element] |= mask;
-
     virtio_disk_rw(VIRTIO1_ID, b, 1, busy_wait);
 }
 
@@ -346,10 +350,14 @@ void read_block(int blockno, uchar data[BSIZE], int busy_wait) {
     struct buf *b = swap_buffer;
     b->blockno = blockno;
 
-    int element = blockno / 64;
-    uint64 mask = 1 << (blockno % 64); //s desna na levo u okviru elementa
-
-    blocksused[element] &= ~mask;
+    acquire(&bitvectorlock);
+    if(blockno % 4 == 0) { //samo za svaki prvi blok u nizu od cetiri
+        int element = blockno / 64;
+        uint64 mask = 1 << (blockno % 64); //s desna na levo u okviru elementa
+        blocksused[element] &= ~mask;
+        numoffreeblocks++;
+    }
+    release(&bitvectorlock);
 
     virtio_disk_rw(VIRTIO1_ID, b, 0, busy_wait);
     memmove(data, b->data, BSIZE);
@@ -390,4 +398,27 @@ virtio_disk_intr(int id)
   }
 
   release(&disk[id].vdisk_lock);
+}
+
+uint64
+getfreeblocknum() {
+    uint64 blocknum = -1;
+    acquire(&bitvectorlock);
+    for(int i = 0; i < 64; i++) {
+        if(blocksused[i] != 0xffffffffffffffff) { //ako element niza nije pun
+            uint64 mask = 1;
+            for(int j = 0; j < 64; j++) {
+                if(!(blocksused[i] & mask)) {
+                    blocknum = (i * 64 + j) * 4;
+                    blocksused[i] |= mask; //odmah se postavlja da je zauzet da ne bi neki drugi proces uleteo
+                    numoffreeblocks--;
+                    break;
+                }
+                mask = mask << 1;
+            }
+        }
+        if(blocknum != -1) break;
+    }
+    release(&bitvectorlock);
+    return blocknum;
 }
