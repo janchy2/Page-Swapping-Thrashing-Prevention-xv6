@@ -400,9 +400,9 @@ virtio_disk_intr(int id)
   release(&disk[id].vdisk_lock);
 }
 
-uint64
+int
 getfreeblocknum() {
-    uint64 blocknum = -1;
+    int blocknum = -1;
     acquire(&bitvectorlock);
     for(int i = 0; i < 64; i++) {
         if(blocksused[i] != 0xffffffffffffffff) { //ako element niza nije pun

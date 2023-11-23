@@ -8,6 +8,7 @@
 #include "spinlock.h"
 #include "riscv.h"
 #include "defs.h"
+#include "proc.h"
 
 void freerange(void *pa_start, void *pa_end);
 
@@ -118,3 +119,63 @@ choosevictimframe()
     return victim;
 }
 
+uchar*
+getframeaddr(framedesc* desc) {
+    uint64 index = (desc - kmem.framedescs) / sizeof(framedesc);
+    uchar* frameaddr = (uchar*)((char*)kmem.frames + index * PGSIZE);
+    return frameaddr;
+}
+
+void
+evictpage(framedesc* desc)
+{
+    //sinfronizacija?????
+    int block = getfreeblocknum();
+    uint64 mask = ~(0xffffffffff << 10); //mora da se ukloni fizicka adresa okvira iz pte
+    *(desc->pte) &= mask;
+    *(desc->pte) |= (block << 10); //umesto fizicke adrese je upisan broj bloka
+    desc->referencebits = 0; //resetuje se jer ce nova stranica da se mapira u njega
+    uchar data[1024];
+    uchar* frameaddr = getframeaddr(desc);
+    for(int i = 0; i < 4; i++) {
+        for(int j = 0; j < 1024; j++) {
+            data[j] = *frameaddr; //sadrzaj okvira se upisuje u bafer
+            frameaddr++;
+        }
+        write_block(block, data, 0);
+        block++;
+    }
+    sfence_vma(); //TLB se cisti jer vise nije validan OPTIMIZOVATI!!!
+}
+
+void
+loadpage(framedesc* desc, uint64* pte)
+{
+    int block = *pte >> 10;
+    uchar data[1024];
+    uchar* frameaddr = getframeaddr(desc);
+    uint64 frame = (uint64)frameaddr; //cuvamo da bismo upisali u pte
+    for(int i = 0; i < 4; i++) {
+        read_block(block, data, 0);
+        for(int j = 0; j < 1024; j++) {
+            *frameaddr = data[j]; //sadrzaj okvira se upisuje u bafer
+            frameaddr++;
+        }
+        block++;
+    }
+    uint64 flags = PTE_FLAGS(*pte);
+    *pte = (PA2PTE(frame) | flags | PTE_V) & ~PTE_D; //ostave se isti flagovi samo se postavi V i skloni se D
+}
+
+void
+handlepagefault(uint64 va)
+{
+    pagetable_t pagetable = myproc()->pagetable;
+    uint64* pte = walk(pagetable, va, 0);
+    //OBRADITI GRESKE!!!
+    framedesc* victim = choosevictimframe();
+    evictpage(victim);
+    loadpage(victim, pte);
+    victim->pte = pte;
+
+}

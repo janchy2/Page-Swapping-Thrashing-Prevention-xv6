@@ -63,11 +63,13 @@ void            ramdiskintr(void);
 void            ramdiskrw(struct buf*);
 
 // kalloc.c
-void*           kalloc(void);
-void            kfree(void *);
-void            kinit(void);
-struct framedesc*      choosevictimframe();
-
+void*                   kalloc(void);
+void                    kfree(void *);
+void                    kinit(void);
+struct framedesc*       choosevictimframe();
+void                    evictpage(struct framedesc*);
+void                    loadpage(struct framedesc*, uint64*);
+void                    handlepagefault(uint64);
 // log.c
 void            initlog(int, struct superblock*);
 void            log_write(struct buf*);
@@ -191,7 +193,7 @@ void            virtio_disk_rw(int id, struct buf *, int, int);
 void            virtio_disk_intr(int id);
 void            write_block(int blockno, uchar* data, int busy_wait);
 void            read_block(int blockno, uchar* data, int busy_wait);
-uint64          getfreeblocknum();
+int             getfreeblocknum();
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
