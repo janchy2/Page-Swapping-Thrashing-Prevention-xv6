@@ -9,6 +9,9 @@
 struct spinlock tickslock;
 uint ticks;
 
+struct spinlock refupdatetickslock;
+uint refupdateticks;
+
 extern char trampoline[], uservec[], userret[];
 
 // in kernelvec.S, calls kerneltrap().
@@ -20,6 +23,8 @@ void
 trapinit(void)
 {
   initlock(&tickslock, "time");
+  initlock(&refupdatetickslock, "refupdate");
+  refupdateticks = 0;
 }
 
 // set up to take exceptions and traps while in the kernel.
@@ -170,6 +175,14 @@ clockintr()
   ticks++;
   wakeup(&ticks);
   release(&tickslock);
+
+  acquire(&refupdatetickslock);
+  refupdateticks++;
+  if(refupdateticks == 4) { //na svake cetiri periode tajmera se azuriraju registri referenciranja
+      updatereferencebits();
+      refupdateticks = 0;
+  }
+  release(&refupdatetickslock);
 }
 
 // check if it's an external interrupt or software interrupt,

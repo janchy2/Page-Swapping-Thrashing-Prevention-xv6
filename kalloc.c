@@ -21,12 +21,16 @@ extern char end[]; // first address after kernel.
  } framedesc;
 
 struct {
-  struct spinlock lock;
-  struct framedesc *framedescs;
-  char *frames;
-  uint64 NUMFRAMES;
-  uint64 freeframes;
+    struct spinlock lock;
+    struct framedesc *framedescs;
+    char *frames;
+    uint64 NUMFRAMES;
+    uint64 freeframes;
 } kmem;
+
+typedef struct page { //radi lakse manipulacije pokazivacima na okvire
+    char pagemem[PGSIZE];
+} page;
 
 void
 kinit()
@@ -43,6 +47,13 @@ kinit()
   freerange((void*)kmem.frames, (void*)PHYSTOP);
 }
 
+uchar*
+getframeaddr(framedesc* desc) {
+    uint index = desc - kmem.framedescs;
+    uchar* frameaddr = (uchar*)((char*)kmem.frames + index * PGSIZE);
+    return frameaddr;
+}
+
 void
 freerange(void *pa_start, void *pa_end) //prosledjuje se pokazivac na okvir
 {
@@ -56,6 +67,7 @@ freerange(void *pa_start, void *pa_end) //prosledjuje se pokazivac na okvir
 // which normally should have been returned by a
 // call to kalloc().  (The exception is when
 // initializing the allocator; see kinit above.)
+
 void
 kfree(void *pa)
 {
@@ -84,18 +96,29 @@ kalloc(void)
 
   char* r = 0;
   acquire(&kmem.lock);
-  for(uint64 i = 0; i < kmem.NUMFRAMES; i++) {
-      if(!kmem.framedescs[i].pte) {
-          r = (char*)kmem.frames + i * PGSIZE;
-          kmem.framedescs[i].pte = (uint64*)1; //samo trenutno
-          kmem.freeframes--;
-          break;
+  if(kmem.freeframes == 0) { //ako nema slobodnih okvira
+      framedesc* victim = choosevictimframe();
+      release(&kmem.lock);
+      evictpage(victim); //mora da se oslobodi brava
+      acquire(&kmem.lock);
+      victim->pte = (uint64*)1; //samo da se oznaci da je okvir zauzet
+      r = (char*)getframeaddr(victim);
+  }
+  else {
+      for(uint64 i = 0; i < kmem.NUMFRAMES; i++) {
+          if(!kmem.framedescs[i].pte) {
+              r = (char*)kmem.frames + i * PGSIZE;
+              kmem.framedescs[i].pte = (uint64*)1; //samo da se oznaci da je okvir zauzet
+              kmem.freeframes--;
+              break;
+          }
       }
   }
   release(&kmem.lock);
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
+
   return (void*)r;
 }
 
@@ -105,11 +128,13 @@ choosevictimframe()
     uint8 min = 0xff;
     framedesc *victim = 0;
     for(uint64 i = 0; i < kmem.NUMFRAMES; i++) {
-        if(*(kmem.framedescs[i].pte) & PTE_U) { //samo korisnicke stranice se izbacuju
-            if(!(*(kmem.framedescs[i].pte) & PTE_D)) { //samo ako je u memoriji
-                if (kmem.framedescs[i].referencebits < min) {
-                    victim = kmem.framedescs + i;
-                    min = kmem.framedescs[i].referencebits;
+        if(kmem.framedescs[i].pte && kmem.framedescs[i].pte != (uint64*)1) {
+            if(*(kmem.framedescs[i].pte) & PTE_U) { //samo korisnicke stranice se izbacuju
+                if(!(*(kmem.framedescs[i].pte) & PTE_D)) { //samo ako je u memoriji
+                    if (kmem.framedescs[i].referencebits < min) {
+                        victim = kmem.framedescs + i;
+                        min = kmem.framedescs[i].referencebits;
+                    }
                 }
             }
         }
@@ -117,13 +142,6 @@ choosevictimframe()
     *(victim->pte) |= PTE_D; //postavimo da je izbacena (ne moze neki drugi proces da je izabere u medjuvremenu)
     *(victim->pte) &= ~PTE_V; //nije validna
     return victim;
-}
-
-uchar*
-getframeaddr(framedesc* desc) {
-    uint64 index = (desc - kmem.framedescs) / sizeof(framedesc);
-    uchar* frameaddr = (uchar*)((char*)kmem.frames + index * PGSIZE);
-    return frameaddr;
 }
 
 void
@@ -178,4 +196,30 @@ handlepagefault(uint64 va)
     loadpage(victim, pte);
     victim->pte = pte;
 
+}
+
+void
+setPtePointer(uint64* pte, uint64* frame) {
+    uint index = (page*)frame - (page*)kmem.frames;
+    acquire(&kmem.lock);
+    kmem.framedescs[index].pte = pte; //postavljanje pokazivaca na pte
+    release(&kmem.lock);
+}
+
+void
+updatereferencebits()
+{
+    //SINHRONIZACIJA !!!!!
+    for(uint64 i = 0; i < kmem.NUMFRAMES; i++) {
+        if(kmem.framedescs[i].pte && kmem.framedescs[i].pte != (uint64*)1) {
+            if (*(kmem.framedescs[i].pte) & PTE_U) { //samo korisnicke stranice se apdejtuju
+                if (!(*(kmem.framedescs[i].pte) & PTE_D)) { //samo ako je u memoriji
+                    kmem.framedescs[i].referencebits >>= 1;
+                    if ((*(kmem.framedescs[i].pte) & PTE_A)) { // ako je stranici pristupano
+                        kmem.framedescs[i].referencebits |= (1 << 7);
+                    }
+                }
+            }
+        }
+    }
 }
