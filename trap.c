@@ -74,7 +74,10 @@ usertrap(void)
     // ok
   } else if(r_scause() == 12 || r_scause() == 13 || r_scause() == 15){
     //page fault
-      handlepagefault(r_stval()); //u stval je virtuelna adresa
+      int ret = handlepagefault(r_stval()); //u stval je virtuelna adresa
+      if(ret == -1) {
+          setkilled(p); //nema mesta na disku, proces se gasi
+      }
   }else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

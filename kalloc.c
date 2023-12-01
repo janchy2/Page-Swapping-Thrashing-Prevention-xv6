@@ -99,7 +99,9 @@ kalloc(void)
   if(kmem.freeframes == 0) { //ako nema slobodnih okvira
       framedesc* victim = choosevictimframe();
       release(&kmem.lock);
-      evictpage(victim); //mora da se oslobodi brava
+      int ret = evictpage(victim); //mora da se oslobodi brava
+      if(ret == -1)
+          return 0; //nema mesta na disku
       acquire(&kmem.lock);
       victim->pte = (uint64*)1; //samo da se oznaci da je okvir zauzet
       r = (char*)getframeaddr(victim);
@@ -144,11 +146,15 @@ choosevictimframe()
     return victim;
 }
 
-void
+int
 evictpage(framedesc* desc)
 {
     //sinfronizacija?????
     int block = getfreeblocknum();
+    if(block == -1) {
+        sfence_vma();
+        return block;
+    }
     uint64 mask = ~(0xffffffffff << 10); //mora da se ukloni fizicka adresa okvira iz pte
     *(desc->pte) &= mask;
     *(desc->pte) |= (block << 10); //umesto fizicke adrese je upisan broj bloka
@@ -164,6 +170,7 @@ evictpage(framedesc* desc)
         block++;
     }
     sfence_vma(); //TLB se cisti jer vise nije validan OPTIMIZOVATI!!!
+    return 0;
 }
 
 void
@@ -185,17 +192,15 @@ loadpage(framedesc* desc, uint64* pte)
     *pte = (PA2PTE(frame) | flags | PTE_V) & ~PTE_D; //ostave se isti flagovi samo se postavi V i skloni se D
 }
 
-void
+int
 handlepagefault(uint64 va)
 {
     pagetable_t pagetable = myproc()->pagetable;
     uint64* pte = walk(pagetable, va, 0);
+    if(!pte) return -1; //nije pronasao ulaz
+    if((*pte & PTE_V) != 0 || (*pte & PTE_D) == 0) return -1; //nije u pitanju izbacena stranica
     //OBRADITI GRESKE!!!
-    framedesc* victim = choosevictimframe();
-    evictpage(victim);
-    loadpage(victim, pte);
-    victim->pte = pte;
-
+    return handleEvictedPage(pte);
 }
 
 void
@@ -222,4 +227,25 @@ updatereferencebits()
             }
         }
     }
+}
+
+int
+handleEvictedPage(uint64* pte) {
+    acquire(&kmem.lock);
+    framedesc* victim;
+    if(kmem.freeframes == 0) { //ako nema okvira, bira se zrtva
+        victim = choosevictimframe();
+        release(&kmem.lock);
+        int ret = evictpage(victim);
+        if(ret == -1) {
+            return ret; //nema mesta na disku, proces treba da se ugasi
+        }
+    }
+    else {
+        release(&kmem.lock);
+        victim = kalloc();
+    }
+    loadpage(victim, pte);
+    victim->pte = pte;
+    return 0;
 }

@@ -99,7 +99,7 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
         return 0;
       memset(pagetable, 0, PGSIZE);
       *pte = PA2PTE(pagetable) | PTE_V;
-      *pte &= ~(PTE_D); //u memoriji je
+      *pte &= ~(PTE_D); //u memoriji je (nije potrebno?)
     }
   }
   return &pagetable[PX(0, va)];
@@ -120,10 +120,14 @@ walkaddr(pagetable_t pagetable, uint64 va)
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     return 0;
-  if((*pte & PTE_V) == 0)
+  if((*pte & PTE_V) == 0 && (*pte & PTE_D) == 0) //ako nije ni na disku
     return 0;
   if((*pte & PTE_U) == 0)
     return 0;
+  if((*pte & PTE_V) == 0 && (*pte & PTE_D) != 0) { //ako je na disku
+      int ret = handlepagefault(va);
+      if(ret == -1) return 0;
+  }
   pa = PTE2PA(*pte);
   return pa;
 }
@@ -158,8 +162,13 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
       return -1;
     if(*pte & PTE_V)
       panic("mappages: remap");
-    *pte = (PA2PTE(pa) | perm | PTE_V) & ~PTE_D; //dodala
-    if(perm & PTE_U) { //samo za korisnicke stranice
+    if(perm & PTE_D) { //ako je u pitanju init proces
+        *pte = (PA2PTE(pa) | perm | PTE_V);
+    }
+    else {
+        *pte = (PA2PTE(pa) | perm | PTE_V) & ~PTE_D;
+    }
+    if(perm & PTE_U) { //samo za korisnicke stranice koje nisu od init
         setPtePointer(pte, (uint64*)pa); //postavlja se pokazivac na pte
     }
     if(a == last)
@@ -185,13 +194,17 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
+    if((*pte & PTE_V) == 0 && (*pte & PTE_D) == 0) //ako nije validna i nije na disku
       panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
-    if(do_free){
+    if(do_free && (*pte & PTE_D) == 0) { //ako je u memoriji
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
+    }
+    else if(do_free && (*pte & PTE_V) == 0 && (*pte & PTE_D) != 0) { //ako je na disku samo se oslobadja blok na disku
+        int blockno = (*pte) >> 10;
+        freeblock(blockno);
     }
     *pte = 0;
   }
@@ -222,7 +235,9 @@ uvmfirst(pagetable_t pagetable, uchar *src, uint sz)
     panic("uvmfirst: more than a page");
   mem = kalloc();
   memset(mem, 0, PGSIZE);
-  mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
+  mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U|PTE_D);
+  //u ovom slucaju postavljamo i valid i koristimo bit koji inace oznacava da je stranica na disku da
+  //ne bismo izbacivali stranice init procesa koje uvek moraju da budu u memoriji
   memmove(mem, src, sz);
 }
 
@@ -251,6 +266,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
       return 0;
     }
   }
+
   return newsz;
 }
 
@@ -315,12 +331,19 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   uint64 pa, i;
   uint flags;
   char *mem;
+  extern int noYield;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
+    if((*pte & PTE_V) == 0 && (*pte & PTE_D) == 0)
       panic("uvmcopy: page not present");
+    if((*pte & PTE_V) == 0 && (*pte & PTE_D) != 0) {
+        noYield = 1; //ne sme da se desi promena konteksta jer fork mora da bude atomican
+        int ret = handleEvictedPage(pte);
+        noYield = 0;
+        if(ret == -1) return ret;
+    }
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)

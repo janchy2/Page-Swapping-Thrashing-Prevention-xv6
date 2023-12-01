@@ -67,9 +67,13 @@ void*                   kalloc(void);
 void                    kfree(void *);
 void                    kinit(void);
 struct framedesc*       choosevictimframe();
-void                    evictpage(struct framedesc*);
+int                     evictpage(struct framedesc*);
 void                    loadpage(struct framedesc*, uint64*);
-void                    handlepagefault(uint64);
+int                     handlepagefault(uint64);
+void                    setPtePointer(uint64*, uint64*);
+void                    updatereferencebits();
+int                     handleEvictedPage(uint64*);
+
 // log.c
 void            initlog(int, struct superblock*);
 void            log_write(struct buf*);
@@ -194,6 +198,7 @@ void            virtio_disk_intr(int id);
 void            write_block(int blockno, uchar* data, int busy_wait);
 void            read_block(int blockno, uchar* data, int busy_wait);
 int             getfreeblocknum();
+void            freeblock(int);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
