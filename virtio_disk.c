@@ -65,7 +65,9 @@ static struct disk {
 
 static struct buf* swap_buffer;
 
-uint64 blocksused[64]; //bit vektor za iskoriscenost blokova na disku za zamenu
+#define NUMOFWORDS 64 //64 za 16M
+
+uint64 blocksused[NUMOFWORDS]; //bit vektor za iskoriscenost blokova na disku za zamenu
 //jedna cetvrtina ukupnog broja blokova, jer uvek uzimamo po 4
 struct spinlock bitvectorlock;
 uint64 numoffreeblocks;
@@ -78,8 +80,8 @@ virtio_disk_init(int id, char * name)
 
   if(id == VIRTIO1_ID) { //inicijalizacija brave za bit vektor blokova na swap disku
       initlock(&bitvectorlock, "bitvector");
-      numoffreeblocks = 64 * 64; //racunaju se po cetiri
-      for(int i = 0; i < 64; i++) {
+      numoffreeblocks = NUMOFWORDS * 64; //racunaju se po cetiri
+      for(int i = 0; i < NUMOFWORDS; i++) {
           blocksused[i] = 0;
       }
   }
@@ -328,9 +330,12 @@ virtio_disk_rw(int id, struct buf *b, int write, int busy_wait)
         sleep(b, &disk[id].vdisk_lock);
     } else {
         release(&disk[id].vdisk_lock);
+        extern int noYield; //fork mora da bude atomican
+        noYield = 1;
         intr_on();
         while(b->disk == 1);
         intr_off();
+        noYield = 0;
         acquire(&disk[id].vdisk_lock);
     }
   }
@@ -343,10 +348,12 @@ virtio_disk_rw(int id, struct buf *b, int write, int busy_wait)
 
 void
 freeblock(int blockno) {
-    int element = blockno / 64;
-    uint64 mask = 1 << (blockno % 64); //s desna na levo u okviru elementa
-    blocksused[element] &= ~mask;
-    numoffreeblocks++;
+    if(blockno % 4 == 0) {
+        int element = blockno / NUMOFWORDS;
+        uint64 mask = 1 << (blockno % 64); //s desna na levo u okviru elementa
+        blocksused[element] &= ~mask;
+        numoffreeblocks++;
+    }
 }
 
 void write_block(int blockno, uchar data[BSIZE], int busy_wait) {
@@ -361,11 +368,7 @@ void read_block(int blockno, uchar data[BSIZE], int busy_wait) {
     struct buf *b = swap_buffer;
     b->blockno = blockno;
 
-    acquire(&bitvectorlock);
-    if(blockno % 4 == 0) { //samo za svaki prvi blok u nizu od cetiri
-        freeblock(blockno);
-    }
-    release(&bitvectorlock);
+    freeblock(blockno);
 
     virtio_disk_rw(VIRTIO1_ID, b, 0, busy_wait);
     memmove(data, b->data, BSIZE);
@@ -411,15 +414,15 @@ virtio_disk_intr(int id)
 int
 getfreeblocknum() {
     int blocknum = -1;
-    acquire(&bitvectorlock);
-    for(int i = 0; i < 64; i++) {
+    for(int i = 0; i < NUMOFWORDS; i++) {
         if(blocksused[i] != 0xffffffffffffffff) { //ako element niza nije pun
             uint64 mask = 1;
             for(int j = 0; j < 64; j++) {
                 if(!(blocksused[i] & mask)) {
-                    blocknum = (i * 64 + j) * 4;
+                    blocknum = (i * NUMOFWORDS + j) * 4;
                     blocksused[i] |= mask; //odmah se postavlja da je zauzet da ne bi neki drugi proces uleteo
                     numoffreeblocks--;
+                    printf("%d ", numoffreeblocks);
                     break;
                 }
                 mask = mask << 1;
@@ -427,7 +430,6 @@ getfreeblocknum() {
         }
         if(blocknum != -1) break;
     }
-    release(&bitvectorlock);
     return blocknum;
 }
 

@@ -181,7 +181,7 @@ loadpage(framedesc* desc, uint64* pte)
     uchar* frameaddr = getframeaddr(desc);
     uint64 frame = (uint64)frameaddr; //cuvamo da bismo upisali u pte
     for(int i = 0; i < 4; i++) {
-        read_block(block, data, 0);
+        read_block(block, data, 1); //ovde se radi busy wait zbog fork-a
         for(int j = 0; j < 1024; j++) {
             *frameaddr = data[j]; //sadrzaj okvira se upisuje u bafer
             frameaddr++;
@@ -231,19 +231,18 @@ updatereferencebits()
 
 int
 handleEvictedPage(uint64* pte) {
-    acquire(&kmem.lock);
     framedesc* victim;
     if(kmem.freeframes == 0) { //ako nema okvira, bira se zrtva
         victim = choosevictimframe();
-        release(&kmem.lock);
         int ret = evictpage(victim);
         if(ret == -1) {
             return ret; //nema mesta na disku, proces treba da se ugasi
         }
     }
     else {
-        release(&kmem.lock);
-        victim = kalloc();
+        uint64 newframe = (uint64)kalloc();
+        uint64 index = (newframe - (uint64)kmem.frames) / PGSIZE;
+        victim = &kmem.framedescs[index];
     }
     loadpage(victim, pte);
     victim->pte = pte;

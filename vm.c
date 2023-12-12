@@ -331,7 +331,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   uint64 pa, i;
   uint flags;
   char *mem;
-  extern int noYield;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -339,9 +338,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0 && (*pte & PTE_D) == 0)
       panic("uvmcopy: page not present");
     if((*pte & PTE_V) == 0 && (*pte & PTE_D) != 0) {
-        noYield = 1; //ne sme da se desi promena konteksta jer fork mora da bude atomican
         int ret = handleEvictedPage(pte);
-        noYield = 0;
         if(ret == -1) return ret;
     }
     pa = PTE2PA(*pte);
