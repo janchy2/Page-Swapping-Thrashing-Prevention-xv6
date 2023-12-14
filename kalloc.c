@@ -129,18 +129,21 @@ choosevictimframe()
 {
     uint8 min = 0xff;
     framedesc *victim = 0;
+    framedesc* reserve = 0; // ako se desi da su sve ff
     for(uint64 i = 0; i < kmem.NUMFRAMES; i++) {
         if(kmem.framedescs[i].pte && kmem.framedescs[i].pte != (uint64*)1) {
             if(*(kmem.framedescs[i].pte) & PTE_U) { //samo korisnicke stranice se izbacuju
-                if(!(*(kmem.framedescs[i].pte) & PTE_D)) { //samo ako je u memoriji
+                if(!(*(kmem.framedescs[i].pte) & PTE_D)) { //samo ako je u memoriji i nije init
+                    reserve = &kmem.framedescs[i];
                     if (kmem.framedescs[i].referencebits < min) {
-                        victim = kmem.framedescs + i;
+                        victim = &kmem.framedescs[i];
                         min = kmem.framedescs[i].referencebits;
                     }
                 }
             }
         }
     }
+    if(!victim) victim = reserve;
     *(victim->pte) |= PTE_D; //postavimo da je izbacena (ne moze neki drugi proces da je izabere u medjuvremenu)
     *(victim->pte) &= ~PTE_V; //nije validna
     return victim;
@@ -149,18 +152,19 @@ choosevictimframe()
 int
 evictpage(framedesc* desc)
 {
-    //sinfronizacija?????
     int block = getfreeblocknum();
     if(block == -1) {
         sfence_vma();
         return block;
     }
+    uint64 pa = PTE2PA(*(desc->pte));
     uint64 mask = ~(0xffffffffff << 10); //mora da se ukloni fizicka adresa okvira iz pte
     *(desc->pte) &= mask;
     *(desc->pte) |= (block << 10); //umesto fizicke adrese je upisan broj bloka
-    desc->referencebits = 0; //resetuje se jer ce nova stranica da se mapira u njega
+    desc->referencebits = 0x80; //resetuje se jer ce nova stranica da se mapira u njega
+    //80 da ne bi odmah bila izbacena ponovo
     uchar data[1024];
-    uchar* frameaddr = getframeaddr(desc);
+    uchar* frameaddr = (uchar*)pa;
     for(int i = 0; i < 4; i++) {
         for(int j = 0; j < 1024; j++) {
             data[j] = *frameaddr; //sadrzaj okvira se upisuje u bafer
@@ -176,7 +180,7 @@ evictpage(framedesc* desc)
 void
 loadpage(framedesc* desc, uint64* pte)
 {
-    int block = *pte >> 10;
+    int block = (*pte) >> 10;
     uchar data[1024];
     uchar* frameaddr = getframeaddr(desc);
     uint64 frame = (uint64)frameaddr; //cuvamo da bismo upisali u pte
@@ -190,6 +194,7 @@ loadpage(framedesc* desc, uint64* pte)
     }
     uint64 flags = PTE_FLAGS(*pte);
     *pte = (PA2PTE(frame) | flags | PTE_V) & ~PTE_D; //ostave se isti flagovi samo se postavi V i skloni se D
+    //sfence_vma();
 }
 
 int
@@ -207,6 +212,9 @@ void
 setPtePointer(uint64* pte, uint64* frame) {
     uint index = (page*)frame - (page*)kmem.frames;
     acquire(&kmem.lock);
+    //printf("ind: %d ", index);
+    //printf("pte*: %d ", (uint64)pte);
+    //printf("pte: %d ", *pte);
     kmem.framedescs[index].pte = pte; //postavljanje pokazivaca na pte
     release(&kmem.lock);
 }
@@ -214,7 +222,6 @@ setPtePointer(uint64* pte, uint64* frame) {
 void
 updatereferencebits()
 {
-    //SINHRONIZACIJA !!!!!
     for(uint64 i = 0; i < kmem.NUMFRAMES; i++) {
         if(kmem.framedescs[i].pte && kmem.framedescs[i].pte != (uint64*)1) {
             if (*(kmem.framedescs[i].pte) & PTE_U) { //samo korisnicke stranice se apdejtuju
@@ -232,14 +239,17 @@ updatereferencebits()
 int
 handleEvictedPage(uint64* pte) {
     framedesc* victim;
+    acquire(&kmem.lock); //mora sinhronizacija jer se zove iz sistemskog poziva
     if(kmem.freeframes == 0) { //ako nema okvira, bira se zrtva
         victim = choosevictimframe();
+        release(&kmem.lock);
         int ret = evictpage(victim);
         if(ret == -1) {
             return ret; //nema mesta na disku, proces treba da se ugasi
         }
     }
     else {
+        release(&kmem.lock);
         uint64 newframe = (uint64)kalloc();
         uint64 index = (newframe - (uint64)kmem.frames) / PGSIZE;
         victim = &kmem.framedescs[index];

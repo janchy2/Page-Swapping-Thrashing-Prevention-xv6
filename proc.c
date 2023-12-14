@@ -259,8 +259,12 @@ userinit(void)
 int
 growproc(int n)
 {
+  //if(n > PHYSTOP - KERNBASE + SWAP_DISK_SIZE) return -1; //odmah se odbija ako je veci od memorijskog prostora i swap diska
   uint64 sz;
   struct proc *p = myproc();
+
+  extern int breakpoint;
+  if(n == 1) breakpoint = 1;
 
   sz = p->sz;
   if(n > 0){

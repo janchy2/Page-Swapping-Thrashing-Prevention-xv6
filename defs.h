@@ -205,3 +205,5 @@ void            freeblock(int);
 
 #define VIRTIO0_ID 0
 #define VIRTIO1_ID 1
+
+#define SWAP_DISK_SIZE (16*1024*1024) //velicina diska

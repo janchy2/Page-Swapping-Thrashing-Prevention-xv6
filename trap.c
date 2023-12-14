@@ -149,6 +149,7 @@ kerneltrap()
   uint64 sepc = r_sepc();
   uint64 sstatus = r_sstatus();
   uint64 scause = r_scause();
+
   
   if((sstatus & SSTATUS_SPP) == 0)
     panic("kerneltrap: not from supervisor mode");
@@ -156,6 +157,10 @@ kerneltrap()
     panic("kerneltrap: interrupts enabled");
 
   if((which_dev = devintr()) == 0){
+      printf("trap");
+      if(scause == 12) printf("12");
+      if(scause == 13) printf("13");
+      if(scause == 15) printf("15");
     printf("scause %p\n", scause);
     printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
     panic("kerneltrap");
@@ -181,7 +186,7 @@ clockintr()
 
   acquire(&refupdatetickslock);
   refupdateticks++;
-  if(refupdateticks == 4) { //na svake cetiri periode tajmera se azuriraju registri referenciranja
+  if(refupdateticks == 2) { //na svake dve periode tajmera se azuriraju registri referenciranja
       updatereferencebits();
       refupdateticks = 0;
   }

@@ -422,7 +422,6 @@ getfreeblocknum() {
                     blocknum = (i * NUMOFWORDS + j) * 4;
                     blocksused[i] |= mask; //odmah se postavlja da je zauzet da ne bi neki drugi proces uleteo
                     numoffreeblocks--;
-                    printf("%d ", numoffreeblocks);
                     break;
                 }
                 mask = mask << 1;
