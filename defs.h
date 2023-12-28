@@ -70,9 +70,10 @@ struct framedesc*       choosevictimframe();
 int                     evictpage(struct framedesc*);
 void                    loadpage(struct framedesc*, uint64*);
 int                     handlepagefault(uint64);
-void                    setPtePointer(uint64*, uint64*);
+void                    setptepointer(uint64*, uint64*);
 void                    updatereferencebits();
-int                     handleEvictedPage(uint64*);
+int                     handleevictedpage(uint64*);
+int                     checkthrashing();
 
 // log.c
 void            initlog(int, struct superblock*);
@@ -117,6 +118,8 @@ void            yield(void);
 int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
+void            procswapout();
+void            procswapin();
 
 // swtch.S
 void            swtch(struct context*, struct context*);

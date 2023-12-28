@@ -60,6 +60,7 @@ static struct disk {
   struct spinlock vdisk_lock;
 
   int bw_transfer;
+
   
 } disk[2];
 
@@ -72,19 +73,18 @@ uint64 blocksused[NUMOFWORDS]; //bit vektor za iskoriscenost blokova na disku za
 struct spinlock bitvectorlock;
 uint64 numoffreeblocks;
 
-
 void
 virtio_disk_init(int id, char * name)
 {
-  uint32 status = 0;
+    if(id == VIRTIO1_ID) { //inicijalizacija brave za bit vektor blokova na swap disku
+        initlock(&bitvectorlock, "bitvector");
+        numoffreeblocks = NUMOFWORDS * 64; //racunaju se po cetiri
+        for(int i = 0; i < NUMOFWORDS; i++) {
+            blocksused[i] = 0;
+        }
+    }
 
-  if(id == VIRTIO1_ID) { //inicijalizacija brave za bit vektor blokova na swap disku
-      initlock(&bitvectorlock, "bitvector");
-      numoffreeblocks = NUMOFWORDS * 64; //racunaju se po cetiri
-      for(int i = 0; i < NUMOFWORDS; i++) {
-          blocksused[i] = 0;
-      }
-  }
+  uint32 status = 0;
 
   initlock(&disk[id].vdisk_lock, name);
   disk[id].name = name;
@@ -349,10 +349,12 @@ virtio_disk_rw(int id, struct buf *b, int write, int busy_wait)
 void
 freeblock(int blockno) {
     if(blockno % 4 == 0) {
+        acquire(&bitvectorlock);
         int element = blockno / NUMOFWORDS;
         uint64 mask = 1 << (blockno % 64); //s desna na levo u okviru elementa
         blocksused[element] &= ~mask;
         numoffreeblocks++;
+        release(&bitvectorlock);
     }
 }
 
@@ -414,6 +416,7 @@ virtio_disk_intr(int id)
 int
 getfreeblocknum() {
     int blocknum = -1;
+    acquire(&bitvectorlock);
     for(int i = 0; i < NUMOFWORDS; i++) {
         if(blocksused[i] != 0xffffffffffffffff) { //ako element niza nije pun
             uint64 mask = 1;
@@ -429,6 +432,6 @@ getfreeblocknum() {
         }
         if(blocknum != -1) break;
     }
+    release(&bitvectorlock);
     return blocknum;
 }
-

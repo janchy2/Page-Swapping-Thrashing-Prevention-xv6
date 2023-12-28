@@ -9,9 +9,6 @@
 struct spinlock tickslock;
 uint ticks;
 
-struct spinlock refupdatetickslock;
-uint refupdateticks;
-
 extern char trampoline[], uservec[], userret[];
 
 // in kernelvec.S, calls kerneltrap().
@@ -19,12 +16,19 @@ void kernelvec();
 
 extern int devintr();
 
+struct spinlock refupdatetickslock;
+uint refupdateticks;
+uint thrashingticks;
+int swappedout;
+
 void
 trapinit(void)
 {
   initlock(&tickslock, "time");
   initlock(&refupdatetickslock, "refupdate");
   refupdateticks = 0;
+  thrashingticks = 0;
+  swappedout = 0;
 }
 
 // set up to take exceptions and traps while in the kernel.
@@ -73,12 +77,13 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else if(r_scause() == 12 || r_scause() == 13 || r_scause() == 15){
-    //page fault
+      //page fault
       int ret = handlepagefault(r_stval()); //u stval je virtuelna adresa
       if(ret == -1) {
           setkilled(p); //nema mesta na disku, proces se gasi
       }
-  }else {
+  }
+  else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     setkilled(p);
@@ -149,7 +154,6 @@ kerneltrap()
   uint64 sepc = r_sepc();
   uint64 sstatus = r_sstatus();
   uint64 scause = r_scause();
-
   
   if((sstatus & SSTATUS_SPP) == 0)
     panic("kerneltrap: not from supervisor mode");
@@ -157,17 +161,13 @@ kerneltrap()
     panic("kerneltrap: interrupts enabled");
 
   if((which_dev = devintr()) == 0){
-      printf("trap");
-      if(scause == 12) printf("12");
-      if(scause == 13) printf("13");
-      if(scause == 15) printf("15");
     printf("scause %p\n", scause);
     printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
     panic("kerneltrap");
   }
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING)
+  if(which_dev == 2 && myproc() != 0 && (myproc()->state == RUNNING || myproc()->state == SWAPPEDOUT)) //dodala
     yield();
 
   // the yield() may have caused some traps to occur,
@@ -179,6 +179,8 @@ kerneltrap()
 void
 clockintr()
 {
+  extern int noYield;
+  if(noYield) return; //fork mora atomicno da se radi, nema promene konteksta
   acquire(&tickslock);
   ticks++;
   wakeup(&ticks);
@@ -186,9 +188,21 @@ clockintr()
 
   acquire(&refupdatetickslock);
   refupdateticks++;
-  if(refupdateticks == 2) { //na svake dve periode tajmera se azuriraju registri referenciranja
+  if(refupdateticks == 0) { //na svake cetiri periode tajmera se azuriraju registri referenciranja
       updatereferencebits();
       refupdateticks = 0;
+  }
+  if(thrashingticks == 12) {
+      int isthrasing = checkthrashing();
+      if(isthrasing) {
+          procswapout();
+          swappedout = 1;
+      }
+      else if(swappedout) {
+          procswapin();
+          swappedout = 0;
+      }
+      thrashingticks = 0;
   }
   release(&refupdatetickslock);
 }

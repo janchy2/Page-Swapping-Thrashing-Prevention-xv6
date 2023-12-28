@@ -263,9 +263,6 @@ growproc(int n)
   uint64 sz;
   struct proc *p = myproc();
 
-  extern int breakpoint;
-  if(n == 1) breakpoint = 1;
-
   sz = p->sz;
   if(n > 0){
     if((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
@@ -286,6 +283,9 @@ fork(void)
   int i, pid;
   struct proc *np;
   struct proc *p = myproc();
+
+  extern int forkCount;
+  forkCount++;
 
   // Allocate process.
   if((np = allocproc()) == 0){
@@ -508,10 +508,10 @@ yield(void)
 {
   extern int noYield;
   if(noYield) return; //fork mora atomicno da se radi, nema promene konteksta
-
   struct proc *p = myproc();
   acquire(&p->lock);
-  p->state = RUNNABLE;
+  if(p->state == RUNNING) //dodala
+    p->state = RUNNABLE;
   sched();
   release(&p->lock);
 }
@@ -691,4 +691,30 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+void
+procswapout() {
+    int maxsz = 0;
+    struct proc *p, *chosen;
+    for(p = proc; p < &proc[NPROC]; p++) {
+        if((p->state == RUNNABLE || p->state == RUNNING) && p->pid != 1 && p->pid != 2) { //nije init
+            if(p->sz > maxsz) { //bira se proces koji koristi najvise memorije
+                chosen = p;
+                maxsz = p->sz;
+            }
+        }
+    }
+    chosen->state = SWAPPEDOUT;
+}
+
+void
+procswapin() {
+    struct proc *p;
+    for(p = proc; p < &proc[NPROC]; p++) {
+        if(p->state == SWAPPEDOUT) {
+            p->state = RUNNABLE;
+            break;
+        }
+    }
 }
