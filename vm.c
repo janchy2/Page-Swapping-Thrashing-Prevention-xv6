@@ -181,8 +181,6 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   uint64 a;
   pte_t *pte;
 
-  /*extern int noYield; //nisam sigurna
-  noYield = 1;*/
 
   if((va % PGSIZE) != 0)
     panic("uvmunmap: not aligned");
@@ -209,7 +207,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     }
     *pte = 0;
   }
-  //noYield = 0;
+  
 }
 
 // create an empty user page table.
