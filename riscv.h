@@ -327,6 +327,15 @@ sfence_vma()
     asm volatile("sfence.vma zero, zero");
 }
 
+#define ASID(satp) ((satp << 4) >> 48) //identifikator adresnog prostora
+
+//postavlja da nije validan TLB odredjenom adresnom prostoru
+static inline void
+sfence_specific(uint64 asid)
+{
+    asm volatile("sfence.vma zero, %0" : : "r" (asid));
+}
+
 typedef uint64 pte_t;
 typedef uint64 *pagetable_t; // 512 PTEs
 

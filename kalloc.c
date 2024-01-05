@@ -19,6 +19,7 @@ typedef struct framedesc {
     uint64 *pte;
     uint8 referencebits;
     uint8 isfree;
+    uint16 asid;
 } framedesc;
 
 struct {
@@ -39,13 +40,15 @@ struct spinlock swaplock;
 void
 kinit()
 {
-    initlock(&kmem.lock, "kmem");
+    //initlock(&kmem.lock, "kmem");
     //initlock(&swaplock, "pageswap");
     kmem.NUMFRAMES = ((uint64)PHYSTOP - (uint64)end) / (sizeof(framedesc) + PGSIZE); //maksimalan broj okvira
+    //printf("num: %d ", kmem.NUMFRAMES);
     kmem.frames = (char*)((char*)end + sizeof(framedesc) * kmem.NUMFRAMES);
     kmem.frames = (char*)PGROUNDUP((uint64)kmem.frames); //mora da bude umnozak PGSIZE
     if(((uint64)PHYSTOP - (uint64)kmem.frames) / PGSIZE < (uint64)kmem.NUMFRAMES) { //ako ima jedan okvir manje zbog zaokruzivanja
         kmem.NUMFRAMES--;
+        //printf("num: %d ", kmem.NUMFRAMES);
     }
     kmem.freeframes = 0;
     kmem.framedescs = (framedesc*)end;
@@ -76,12 +79,14 @@ kfree(void *pa)
     memset(pa, 1, PGSIZE);
 
     uint64 index = ((uint64)pa - (uint64)kmem.frames) / PGSIZE;
+    //printf("%d ", index);
 
     acquire(&kmem.lock);
     kmem.freeframes++;
     kmem.framedescs[index].pte = 0;
     kmem.framedescs[index].referencebits = 0;
     kmem.framedescs[index].isfree = 1; //okvir slobodan
+    kmem.framedescs[index].asid = 0;
     release(&kmem.lock);
 
     //release(&swaplock);
@@ -103,31 +108,34 @@ kalloc(void)
     //acquire(&swaplock);
 
     char* r = 0;
-    acquire(&kmem.lock);
+    //acquire(&kmem.lock);
     if(kmem.freeframes == 0) { //ako nema slobodnih okvira
         framedesc* victim = choosevictimframe();
-        release(&kmem.lock);
+        //release(&kmem.lock);
         int ret = evictpage(victim); //mora da se oslobodi brava
         if(ret == -1) {
             //release(&swaplock);
             return 0; //nema mesta na disku
         }
-        acquire(&kmem.lock);
+        //acquire(&kmem.lock);
         victim->isfree = 0;//okvir zauzet
         victim->pte = 0;
+        victim->asid = ASID(r_satp());
         r = (char*)getframeaddr(victim);
-        release(&kmem.lock);
+        //release(&kmem.lock);
     }
     else {
         for(uint64 i = 0; i < kmem.NUMFRAMES; i++) {
             if(kmem.framedescs[i].isfree) {
                 r = (char*)kmem.frames + i * PGSIZE;
+                //printf("k:%d ", i);
                 kmem.framedescs[i].isfree = 0;
+                kmem.framedescs[i].asid = ASID(r_satp()); //id adresnog prostora
                 kmem.freeframes--;
                 break;
             }
         }
-        release(&kmem.lock);
+        //release(&kmem.lock);
     }
 
     if(r)
@@ -140,10 +148,12 @@ kalloc(void)
 
 void
 setptepointer(uint64* pte, uint64* frame) {
-    uint index = (page*)frame - (page*)kmem.frames;
-    acquire(&kmem.lock);
+    //uint index = (page*)frame - (page*)kmem.frames;
+    uint64 index = ((uint64)frame - (uint64)kmem.frames) / PGSIZE;
+    //printf("i:%d", index);
+    //acquire(&kmem.lock);
     kmem.framedescs[index].pte = pte; //postavljanje pokazivaca na pte
-    release(&kmem.lock);
+    //release(&kmem.lock);
 }
 
 framedesc*
@@ -154,7 +164,7 @@ choosevictimframe()
     framedesc* reserve = 0; // ako se desi da su sve ff
     for(uint64 i = 0; i < kmem.NUMFRAMES; i++) {
         if(kmem.framedescs[i].pte && !kmem.framedescs[i].isfree) {
-            if(*(kmem.framedescs[i].pte) & PTE_U) { //samo korisnicke stranice se izbacuju
+            if(*(kmem.framedescs[i].pte) & PTE_U && *(kmem.framedescs[i].pte) & PTE_V) { //samo korisnicke stranice se izbacuju
                 if(!(*(kmem.framedescs[i].pte) & PTE_D)) { //samo ako je u memoriji i nije init
                     reserve = &kmem.framedescs[i];
                     if (kmem.framedescs[i].referencebits < min) {
@@ -176,12 +186,18 @@ evictpage(framedesc* desc)
 {
     int block = getfreeblocknum();
     if(block == -1) {
+        *(desc->pte) &= ~PTE_D; //nije izbacena
+        *(desc->pte) |= PTE_V; //validna
         return block;
     }
+    //printf("b1:%d ", block);
+    //uint index = desc - kmem.framedescs;
     uint64 pa = PTE2PA(*(desc->pte));
+    //printf("d1:%d %d ", index, (uint64)*desc->pte);
     uint64 mask = ~(0xffffffffff << 10); //mora da se ukloni fizicka adresa okvira iz pte
     *(desc->pte) &= mask;
     *(desc->pte) |= (block << 10); //umesto fizicke adrese je upisan broj bloka
+    //printf("d2:%d %d ", index, (uint64)*desc->pte);
     desc->referencebits = 0x80; //resetuje se jer ce nova stranica da se mapira u njega
     //80 da ne bi odmah bila izbacena ponovo
     //uchar data[1024];
@@ -194,7 +210,8 @@ evictpage(framedesc* desc)
         write_block(block, (uchar*)data, 1);
         block++;
     }
-    sfence_vma(); //TLB se cisti jer vise nije validan OPTIMIZOVATI!!!
+    sfence_vma();
+    //sfence_specific(desc->asid); //TLB se cisti za odgovarajuci adresni prostor
     return 0;
 }
 
@@ -253,10 +270,10 @@ handleevictedpage(uint64* pte) {
     //acquire(&swaplock);
 
     framedesc* victim;
-    acquire(&kmem.lock); //mora sinhronizacija jer se zove iz sistemskog poziva
+    //acquire(&kmem.lock); //mora sinhronizacija jer se zove iz sistemskog poziva
     if(kmem.freeframes == 0) { //ako nema okvira, bira se zrtva
         victim = choosevictimframe();
-        release(&kmem.lock);
+        //release(&kmem.lock);
         int ret = evictpage(victim);
         if(ret == -1) {
             //release(&swaplock);
@@ -264,7 +281,7 @@ handleevictedpage(uint64* pte) {
         }
     }
     else {
-        release(&kmem.lock);
+        //release(&kmem.lock);
         //release(&swaplock);
         uint64 newframe = (uint64)kalloc();
         //acquire(&swaplock); ////////////////////////////////////////////
@@ -273,6 +290,7 @@ handleevictedpage(uint64* pte) {
     }
     loadpage(victim, pte);
     victim->pte = pte;
+    victim->asid = ASID(r_satp());
 
     //release(&swaplock);
     return 0;

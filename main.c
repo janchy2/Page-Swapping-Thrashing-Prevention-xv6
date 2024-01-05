@@ -6,7 +6,7 @@
 
 volatile static int started = 0;
 int noYield = 0;
-int breakpoint = 0;
+int forkCount = 0;
 
 // start() jumps here in supervisor mode on all CPUs.
 void

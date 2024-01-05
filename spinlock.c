@@ -65,8 +65,10 @@ release(struct spinlock *lk)
         // Print the value of ra register
         printf("r:%d ", ra_value);
     }*/
+    int x = 5;
+    x++;
   if(!holding(lk)) {
-      printf(lk->name);
+      //printf(lk->name);
       panic("release");
   }
 

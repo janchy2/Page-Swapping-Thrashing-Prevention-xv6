@@ -160,7 +160,7 @@ kerneltrap()
   if(intr_get() != 0)
     panic("kerneltrap: interrupts enabled");
 
-  if((which_dev = devintr()) == 0){
+  else if((which_dev = devintr()) == 0){
     printf("scause %p\n", scause);
     printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
     panic("kerneltrap");
@@ -181,18 +181,18 @@ clockintr()
 {
   extern int noYield;
   if(noYield) return; //fork mora atomicno da se radi, nema promene konteksta
-  acquire(&tickslock);
+  //acquire(&tickslock);
   ticks++;
   wakeup(&ticks);
-  release(&tickslock);
+  //release(&tickslock);
 
-  acquire(&refupdatetickslock);
+  //acquire(&refupdatetickslock);
   refupdateticks++;
   if(refupdateticks == 0) { //na svake cetiri periode tajmera se azuriraju registri referenciranja
       updatereferencebits();
       refupdateticks = 0;
   }
-  if(thrashingticks == 12) {
+  /*if(thrashingticks == 12) {
       int isthrasing = checkthrashing();
       if(isthrasing) {
           procswapout();
@@ -203,8 +203,8 @@ clockintr()
           swappedout = 0;
       }
       thrashingticks = 0;
-  }
-  release(&refupdatetickslock);
+  }*/
+  //release(&refupdatetickslock);
 }
 
 // check if it's an external interrupt or software interrupt,

@@ -161,7 +161,8 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if(*pte & PTE_V)
       panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
-    if(perm & PTE_U) { //samo za korisnicke stranice
+
+    if(perm & PTE_U && !(perm & PTE_D)) { //samo za korisnicke stranice
         setptepointer(pte, (uint64*)pa); //postavlja se pokazivac na pte
     }
     if(a == last)
@@ -181,6 +182,8 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   uint64 a;
   pte_t *pte;
 
+  /*extern int noYield; //nisam sigurna
+  noYield = 1;*/
 
   if((va % PGSIZE) != 0)
     panic("uvmunmap: not aligned");
@@ -188,6 +191,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
+    //printf("p:%d ", pte);
     if((*pte & PTE_V) == 0 && (*pte & PTE_D) == 0) //ako nije validna i nije na disku
         panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
@@ -203,11 +207,12 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     else if((*pte & PTE_V) == 0 && (*pte & PTE_D) != 0 && (*pte & PTE_C) == 0) {
         //ako je na disku i nije init samo se oslobadja blok na disku
         int blockno = (*pte) >> 10;
+        //printf("b:%d ", blockno);
         freeblock(blockno);
     }
     *pte = 0;
   }
-  
+  //noYield = 0;
 }
 
 // create an empty user page table.
@@ -256,6 +261,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
   for(a = oldsz; a < newsz; a += PGSIZE){
     mem = kalloc();
     if(mem == 0){
+        printf(" DOSAO ");
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
@@ -389,7 +395,15 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0) {
       va0 = PGROUNDDOWN(dstva);
-      pa0 = walkaddr(pagetable, dstva);
+      uint64* pte = walk(pagetable, dstva, 0);
+      if((*pte & PTE_V) == 0 && (*pte & PTE_D) != 0 && (*pte & PTE_C) == 0) { //ako je na disku
+          int ret = handleevictedpage(pte);
+          if(ret == -1) return ret;
+      }
+      /*printf("%d ", *pte);
+      printf("%d ", pte);*/
+      pa0 = PTE2PA(*pte);
+
       if (pa0 == 0)
           return -1;
       n = PGSIZE - (dstva - va0);
@@ -399,6 +413,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
       len -= n;
       src += n;
       dstva = va0 + PGSIZE;
+      (*pte) &= ~PTE_D;
   }
   return 0;
 }
