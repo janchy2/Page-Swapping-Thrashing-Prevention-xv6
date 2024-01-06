@@ -259,7 +259,6 @@ userinit(void)
 int
 growproc(int n)
 {
-  //if(n > PHYSTOP - KERNBASE + SWAP_DISK_SIZE) return -1; //odmah se odbija ako je veci od memorijskog prostora i swap diska
   uint64 sz;
   struct proc *p = myproc();
 
@@ -695,7 +694,7 @@ procdump(void)
 void
 procswapout() {
     int maxsz = 0;
-    struct proc *p, *chosen;
+    struct proc *p, *chosen = 0;
     for(p = proc; p < &proc[NPROC]; p++) {
         if((p->state == RUNNABLE || p->state == RUNNING) && p->pid != 1 && p->pid != 2) { //nije init i shell
             if(p->sz > maxsz) { //bira se proces koji koristi najvise memorije
@@ -704,7 +703,10 @@ procswapout() {
             }
         }
     }
-    chosen->state = SWAPPEDOUT;
+    if(chosen) {
+        evictallpages(chosen->pagetable, chosen->sz); //odmah se izbacuju sve stranice izabranog procesa
+        chosen->state = SWAPPEDOUT;
+    }
 }
 
 void
@@ -726,4 +728,9 @@ setnoyield(int value) {
 int
 isfork() {
 	return mycpu()->isFork;
+}
+
+void
+setisfork(int value) {
+    mycpu()->isFork = value;
 }

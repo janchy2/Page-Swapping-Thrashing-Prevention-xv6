@@ -74,8 +74,9 @@ void                    setptepointer(uint64*, uint64*);
 void                    updatereferencebits();
 int                     handleevictedpage(uint64*);
 int                     checkthrashing();
-void			 removeptepointer(uint64);
-int			 loadonrequest(uint64*);
+void			        removeptepointer(uint64);
+int			            loadonrequest(uint64*);
+void                    evictallpages(pagetable_t, uint64);
 
 // log.c
 void            initlog(int, struct superblock*);
@@ -124,6 +125,7 @@ void            procswapout();
 void            procswapin();
 void		    setnoyield(int);
 int 		    isfork();
+void            setisfork(int);
 
 // swtch.S
 void            swtch(struct context*, struct context*);

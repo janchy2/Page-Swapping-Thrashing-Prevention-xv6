@@ -186,7 +186,10 @@ evictpage(framedesc* desc)
             data[j] = *frameaddr; //sadrzaj okvira se upisuje u bafer
             frameaddr++;
         }
-        write_block(block, (uchar*)data, 1);
+        if(isfork()) //ako je fork mora busywait
+            write_block(block, (uchar*)data, 1);
+        else
+            write_block(block, (uchar*)data, 0);
         block++;
     }
     sfence_vma();
@@ -202,7 +205,10 @@ loadpage(framedesc* desc, uint64* pte)
     uchar* frameaddr = (uchar*)getframeaddr(desc);
     uint64 frame = (uint64)frameaddr; //cuvamo da bismo upisali u pte
     for(int i = 0; i < 4; i++) {
-        read_block(block, (uchar*)data, 1);
+        if(isfork()) //ako je fork mora busywait
+            read_block(block, (uchar*)data, 1);
+        else
+            read_block(block, (uchar*)data, 0);
         for(int j = 0; j < 1024; j++) {
             *frameaddr = data[j]; //sadrzaj okvira se upisuje u bafer
             frameaddr++;
@@ -278,10 +284,12 @@ checkthrashing() {
         if(kmem.framedescs[i].pte && !kmem.framedescs[i].isfree) {
             if (*(kmem.framedescs[i].pte) & PTE_U) { //samo korisnicke stranice se apdejtuju
                 if (!(*(kmem.framedescs[i].pte) & PTE_D)) { //samo ako je u memoriji
-                    kmem.framedescs[i].referencebits >>= 1;
                     if ((*(kmem.framedescs[i].pte) & PTE_A)) { // ako je stranici pristupano
                         numofaccessed++;
-                        //*(kmem.framedescs[i].pte) &= ~PTE_A;
+                    }
+                    else if(kmem.framedescs[i].referencebits & 0xff) {
+                        //ako je stranici uopste pristupano u poslednjih osam update perioda
+                        numofaccessed++;
                     }
                 }
             }
@@ -289,4 +297,37 @@ checkthrashing() {
     }
     if(numofaccessed > kmem.NUMFRAMES) return 1;
     return 0;
+}
+
+void
+evictallpages(pagetable_t pagetable, uint64 sz) {
+    if(sz == 0) return;
+    uint64 npages = PGROUNDUP(sz)/PGSIZE;
+    uint64 a = 0;
+    uint64* pte;
+
+    for(; a < npages*PGSIZE; a += PGSIZE){
+        pte = walk(pagetable, a, 0);
+        if(!pte) continue;
+        if((*pte & PTE_V) && (*pte & PTE_U) && !(*pte & PTE_D)) {
+            uint64 pa = PTE2PA(*pte);
+            uint64 index = (pa - (uint64)kmem.frames) / PGSIZE;
+            acquire(&kmem.lock);
+            if(kmem.framedescs[index].pte) { //samo ako stranica moze da se izbacuje
+                setisfork(1); //ne treba da se desava promena konteksta
+                *pte |= PTE_D;
+                *pte &= ~PTE_V;
+                release(&kmem.lock);
+                int ret = evictpage(&kmem.framedescs[index]);
+                acquire(&kmem.lock);
+                setisfork(0);
+                if(ret == -1) { //nema mesta na disku, izbaceno je sta je moglo
+                    break;
+                }
+                kmem.framedescs[index].pte = 0;
+                kmem.framedescs[index].isfree = 1;
+            }
+            release(&kmem.lock);
+        }
+    }
 }

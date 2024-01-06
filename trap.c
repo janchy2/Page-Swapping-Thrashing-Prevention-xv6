@@ -25,7 +25,6 @@ void
 trapinit(void)
 {
   initlock(&tickslock, "time");
-  initlock(&refupdatetickslock, "refupdate");
   refupdateticks = 0;
   thrashingticks = 0;
   swappedout = 0;
@@ -185,8 +184,6 @@ clockintr()
   wakeup(&ticks);
   release(&tickslock);
 
-  acquire(&refupdatetickslock);
-
   thrashingticks++;
   if(thrashingticks == 32) {
       int isthrasing = checkthrashing();
@@ -202,12 +199,10 @@ clockintr()
   }
 
   refupdateticks++;
-  if(refupdateticks == 16) { //na svakih 8 perioda tajmera se azuriraju registri referenciranja
+  if(refupdateticks == 8) { //na svakih 8 perioda tajmera se azuriraju registri referenciranja
       updatereferencebits();
       refupdateticks = 0;
   }
-
-  release(&refupdatetickslock);
 }
 
 // check if it's an external interrupt or software interrupt,
