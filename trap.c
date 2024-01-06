@@ -179,20 +179,16 @@ kerneltrap()
 void
 clockintr()
 {
-  extern int noYield;
-  if(noYield) return; //fork mora atomicno da se radi, nema promene konteksta
+  if(mycpu()->noYield) return; //fork mora atomicno da se radi, nema promene konteksta
   acquire(&tickslock);
   ticks++;
   wakeup(&ticks);
   release(&tickslock);
 
   acquire(&refupdatetickslock);
-  refupdateticks++;
-  if(refupdateticks == 8) { //na svake cetiri periode tajmera se azuriraju registri referenciranja
-      updatereferencebits();
-      refupdateticks = 0;
-  }
-  /*if(thrashingticks == 12) {
+
+  thrashingticks++;
+  if(thrashingticks == 32) {
       int isthrasing = checkthrashing();
       if(isthrasing) {
           procswapout();
@@ -203,7 +199,14 @@ clockintr()
           swappedout = 0;
       }
       thrashingticks = 0;
-  }*/
+  }
+
+  refupdateticks++;
+  if(refupdateticks == 16) { //na svakih 8 perioda tajmera se azuriraju registri referenciranja
+      updatereferencebits();
+      refupdateticks = 0;
+  }
+
   release(&refupdatetickslock);
 }
 

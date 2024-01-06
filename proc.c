@@ -259,7 +259,7 @@ userinit(void)
 int
 growproc(int n)
 {
-  if(n > PHYSTOP - KERNBASE + SWAP_DISK_SIZE) return -1; //odmah se odbija ako je veci od memorijskog prostora i swap diska
+  //if(n > PHYSTOP - KERNBASE + SWAP_DISK_SIZE) return -1; //odmah se odbija ako je veci od memorijskog prostora i swap diska
   uint64 sz;
   struct proc *p = myproc();
 
@@ -283,6 +283,8 @@ fork(void)
   int i, pid;
   struct proc *np;
   struct proc *p = myproc();
+  
+  mycpu()->isFork = 1; //treba da se radi busywait
 
   // Allocate process.
   if((np = allocproc()) == 0){
@@ -293,6 +295,7 @@ fork(void)
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
     release(&np->lock);
+    mycpu()->isFork = 0;
     return -1;
   }
   np->sz = p->sz;
@@ -503,11 +506,10 @@ sched(void)
 void
 yield(void)
 {
-  extern int noYield;
-  if(noYield) return; //fork mora atomicno da se radi, nema promene konteksta
+  if(mycpu()->noYield) return; //fork mora atomicno da se radi, nema promene konteksta
   struct proc *p = myproc();
   acquire(&p->lock);
-  if(p->state == RUNNING) //dodala
+  if(p->state == RUNNING) //moze da bude i SWAPPEDOUT, onda tako treba da ostane
     p->state = RUNNABLE;
   sched();
   release(&p->lock);
@@ -695,7 +697,7 @@ procswapout() {
     int maxsz = 0;
     struct proc *p, *chosen;
     for(p = proc; p < &proc[NPROC]; p++) {
-        if((p->state == RUNNABLE || p->state == RUNNING) && p->pid != 1 && p->pid != 2) { //nije init
+        if((p->state == RUNNABLE || p->state == RUNNING) && p->pid != 1 && p->pid != 2) { //nije init i shell
             if(p->sz > maxsz) { //bira se proces koji koristi najvise memorije
                 chosen = p;
                 maxsz = p->sz;
@@ -714,4 +716,14 @@ procswapin() {
             break;
         }
     }
+}
+
+void
+setnoyield(int value) {
+	mycpu()->noYield = value;
+}
+
+int
+isfork() {
+	return mycpu()->isFork;
 }

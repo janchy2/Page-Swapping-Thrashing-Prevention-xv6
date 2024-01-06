@@ -120,11 +120,13 @@ walkaddr(pagetable_t pagetable, uint64 va)
     return 0;
   if(!(*pte & PTE_V) && !(*pte & PTE_D)) //ako nije ni na disku
       return 0;
-  if(!(*pte & PTE_U))
-      return 0;
-  if(!(*pte & PTE_V) && (*pte & PTE_D)) { //ako je na disku
+  if(!(*pte & PTE_V) && (*pte & PTE_D) && (*pte & PTE_U)) { //ako je na disku
       int ret = handleevictedpage(pte);
       if(ret == -1) return 0;
+  }
+  if(!(*pte & PTE_V) && (*pte & PTE_D) && !(*pte & PTE_U)) { //treba da se ucita dinamicki
+  	int ret = loadonrequest(pte);
+  	if(ret == -1) return 0;
   }
   pa = PTE2PA(*pte);
   return pa;
@@ -161,11 +163,15 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if(*pte & PTE_V)
       panic("mappages: remap");
     int set = 0;
-    if(perm & PTE_D) {
+    if(perm & PTE_D && perm & PTE_U) { //ako nije dinamicko ucitavanje
     	set = 1;
     	perm &= ~PTE_D;
     }
     *pte = PA2PTE(pa) | perm | PTE_V;
+    
+    if(*pte & PTE_D) { //ako jeste dinamicko ucitavanje
+    	*pte &= ~PTE_V;
+    }
 
     if(perm & PTE_U && set) { //samo za korisnicke stranice
         setptepointer(pte, (uint64*)pa); //postavlja se pokazivac na pte
@@ -197,7 +203,10 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
         panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
-    if(do_free && !(*pte & PTE_D)) { //ako je u memoriji
+    
+    if(!(*pte & PTE_U) && (*pte & PTE_D)) {} //nije dinamicki ucitana
+    
+    else if(do_free && !(*pte & PTE_D)) { //ako je u memoriji
         uint64 pa = PTE2PA(*pte);
         kfree((void*)pa);
     }
@@ -256,16 +265,25 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
 
   oldsz = PGROUNDUP(oldsz);
   for(a = oldsz; a < newsz; a += PGSIZE){
-    mem = kalloc();
-    if(mem == 0){
-      uvmdealloc(pagetable, a, oldsz);
-      return 0;
-    }
-    memset(mem, 0, PGSIZE);
-    if(mappages(pagetable, a, PGSIZE, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
-      kfree(mem);
-      uvmdealloc(pagetable, a, oldsz);
-      return 0;
+ 
+    if(xperm & PTE_D) { //dinamicko ucitavanje, u pitanju je stranica koja moze da se izbacuje
+    	if(mappages(pagetable, a, PGSIZE, 0, PTE_R|xperm) != 0) { //mapira se bez U flag-a
+      	uvmdealloc(pagetable, a, oldsz);
+      	return 0;
+      	}
+      }
+    else {
+    	mem = kalloc();
+    	if(mem == 0){
+      	uvmdealloc(pagetable, a, oldsz);
+      	return 0;
+    	}
+    	memset(mem, 0, PGSIZE);
+    	if(mappages(pagetable, a, PGSIZE, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
+      	kfree(mem);
+      	uvmdealloc(pagetable, a, oldsz);
+      	return 0;
+    	}
     }
   }
   return newsz;
@@ -346,7 +364,8 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((mem = kalloc()) == 0)
         goto err;
     
-    *pte &= ~PTE_D;
+    if(*pte & PTE_U) //ako je ucitana
+    	*pte &= ~PTE_D;
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
 
@@ -414,7 +433,8 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
     va0 = PGROUNDDOWN(srcva);
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
-      return -1;
+        return -1;
+
     n = PGSIZE - (srcva - va0);
     if(n > len)
       n = len;

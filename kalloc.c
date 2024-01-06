@@ -222,6 +222,8 @@ handlepagefault(uint64 va)
     uint64* pte = walk(pagetable, va, 0);
     if(pte == 0) return -1; //greska
     if((*pte & PTE_V) || !(*pte & PTE_D)) return -1; //nije u pitanju izbacena stranica
+    if(!(*pte & PTE_U) && (*pte & PTE_D)) //dinamicko ucitavanje
+    	return loadonrequest(pte);
     return handleevictedpage(pte);
 }
 
@@ -257,6 +259,16 @@ handleevictedpage(uint64* pte) {
     release(&kmem.lock);
 
     return 0;
+}
+
+int
+loadonrequest(uint64* pte) {
+	char* mem = kalloc();
+	if(mem == 0) return -1;
+	*pte |= PA2PTE(mem) | PTE_U | PTE_V;
+	*pte &= ~PTE_D;
+	setptepointer(pte, (uint64*)mem);
+	return 0;
 }
 
 int

@@ -269,12 +269,12 @@ virtio_disk_rw(int id, struct buf *b, int write, int busy_wait)
         sleep(&disk[id].free[0], &disk[id].vdisk_lock);
     } else {
         release(&disk[id].vdisk_lock);
-        extern int noYield; //fork mora da bude atomican
-        noYield = 1;
+        //fork mora da bude atomican
+        setnoyield(1);
         intr_on();
         while(alloc3_desc(id, idx) != 0);
         intr_off();
-        noYield = 0;
+        setnoyield(0);
         acquire(&disk[id].vdisk_lock);
     }
   }
@@ -333,12 +333,12 @@ virtio_disk_rw(int id, struct buf *b, int write, int busy_wait)
         sleep(b, &disk[id].vdisk_lock);
     } else {
         release(&disk[id].vdisk_lock);
-        extern int noYield; //fork mora da bude atomican
-        noYield = 1;
+      	 //fork mora da bude atomican
+        setnoyield(1);
         intr_on();
         while(b->disk == 1);
         intr_off();
-        noYield = 0;
+        setnoyield(0);
         acquire(&disk[id].vdisk_lock);
     }
   }
