@@ -181,14 +181,14 @@ clockintr()
 {
   extern int noYield;
   if(noYield) return; //fork mora atomicno da se radi, nema promene konteksta
-  //acquire(&tickslock);
+  acquire(&tickslock);
   ticks++;
   wakeup(&ticks);
-  //release(&tickslock);
+  release(&tickslock);
 
-  //acquire(&refupdatetickslock);
+  acquire(&refupdatetickslock);
   refupdateticks++;
-  if(refupdateticks == 0) { //na svake cetiri periode tajmera se azuriraju registri referenciranja
+  if(refupdateticks == 8) { //na svake cetiri periode tajmera se azuriraju registri referenciranja
       updatereferencebits();
       refupdateticks = 0;
   }
@@ -204,7 +204,7 @@ clockintr()
       }
       thrashingticks = 0;
   }*/
-  //release(&refupdatetickslock);
+  release(&refupdatetickslock);
 }
 
 // check if it's an external interrupt or software interrupt,

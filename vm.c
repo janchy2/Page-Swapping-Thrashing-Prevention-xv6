@@ -118,11 +118,11 @@ walkaddr(pagetable_t pagetable, uint64 va)
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     return 0;
-  if((*pte & PTE_V) == 0 && (*pte & PTE_D) == 0) //ako nije ni na disku
+  if(!(*pte & PTE_V) && !(*pte & PTE_D)) //ako nije ni na disku
       return 0;
-  if((*pte & PTE_U) == 0)
+  if(!(*pte & PTE_U))
       return 0;
-  if((*pte & PTE_V) == 0 && (*pte & PTE_D) != 0 && (*pte & PTE_C) == 0) { //ako je na disku
+  if(!(*pte & PTE_V) && (*pte & PTE_D)) { //ako je na disku
       int ret = handleevictedpage(pte);
       if(ret == -1) return 0;
   }
@@ -160,9 +160,14 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
       return -1;
     if(*pte & PTE_V)
       panic("mappages: remap");
+    int set = 0;
+    if(perm & PTE_D) {
+    	set = 1;
+    	perm &= ~PTE_D;
+    }
     *pte = PA2PTE(pa) | perm | PTE_V;
 
-    if(perm & PTE_U && !(perm & PTE_D)) { //samo za korisnicke stranice
+    if(perm & PTE_U && set) { //samo za korisnicke stranice
         setptepointer(pte, (uint64*)pa); //postavlja se pokazivac na pte
     }
     if(a == last)
@@ -182,37 +187,31 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   uint64 a;
   pte_t *pte;
 
-  /*extern int noYield; //nisam sigurna
-  noYield = 1;*/
-
   if((va % PGSIZE) != 0)
     panic("uvmunmap: not aligned");
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
-    //printf("p:%d ", pte);
-    if((*pte & PTE_V) == 0 && (*pte & PTE_D) == 0) //ako nije validna i nije na disku
+    if(!(*pte & PTE_V) && !(*pte & PTE_D)) //ako nije validna i nije na disku
         panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
-    if(do_free && (*pte & PTE_D) == 0) { //ako je u memoriji
+    if(do_free && !(*pte & PTE_D)) { //ako je u memoriji
         uint64 pa = PTE2PA(*pte);
         kfree((void*)pa);
     }
-    else if(do_free && (*pte & PTE_D) != 0 && (*pte & PTE_C) != 0) { //init
-        uint64 pa = PTE2PA(*pte);
-        kfree((void*)pa);
-    }
-    else if((*pte & PTE_V) == 0 && (*pte & PTE_D) != 0 && (*pte & PTE_C) == 0) {
-        //ako je na disku i nije init samo se oslobadja blok na disku
-        int blockno = (*pte) >> 10;
-        //printf("b:%d ", blockno);
+    else if(do_free && !(*pte & PTE_V) && (*pte & PTE_D)) {
+        //ako je na disku samo se oslobadja blok na disku
+        uint32 blockno = (*pte) >> 10;
         freeblock(blockno);
+    }
+    else if(*pte & PTE_U){
+        uint64 pa = PTE2PA(*pte);
+        removeptepointer(pa);
     }
     *pte = 0;
   }
-  //noYield = 0;
 }
 
 // create an empty user page table.
@@ -240,9 +239,7 @@ uvmfirst(pagetable_t pagetable, uchar *src, uint sz)
     panic("uvmfirst: more than a page");
   mem = kalloc();
   memset(mem, 0, PGSIZE);
-  mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U|PTE_D|PTE_C);
-  //u ovom slucaju koristimo bit koji inace oznacava da je stranica na disku i onaj za copy on write da
-  //ne bismo izbacivali stranice init procesa koje uvek moraju da budu u memoriji
+  mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
   memmove(mem, src, sz);
 }
 
@@ -261,7 +258,6 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
   for(a = oldsz; a < newsz; a += PGSIZE){
     mem = kalloc();
     if(mem == 0){
-        printf(" DOSAO ");
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
@@ -340,24 +336,19 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0 && (*pte & PTE_D) == 0)
+    if(!(*pte & PTE_V) && !(*pte & PTE_D))
       panic("uvmcopy: page not present");
-    if((*pte & PTE_V) == 0 && (*pte & PTE_D) != 0) {
+    if(!(*pte & PTE_V) && (*pte & PTE_D)) {
         int ret = handleevictedpage(pte);
         if(ret == -1) return ret;
         *pte |= PTE_D; //zakljucana da ne izbaci nju u kalloc
     }
     if((mem = kalloc()) == 0)
         goto err;
+    
     *pte &= ~PTE_D;
     pa = PTE2PA(*pte);
-    extern int forkCount;
-    if(forkCount > 2) {
-        flags = PTE_FLAGS(*pte) & (~PTE_C); //sklanjamo flag za init ???
-    }
-    else {
-        flags = PTE_FLAGS(*pte);
-    }
+    flags = PTE_FLAGS(*pte);
 
     memmove(mem, (char*)pa, PGSIZE);
     if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
@@ -383,6 +374,8 @@ uvmclear(pagetable_t pagetable, uint64 va)
   if(pte == 0)
     panic("uvmclear");
   *pte &= ~PTE_U;
+  uint64 pa = PTE2PA(*pte); //dodala
+  removeptepointer(pa);
 }
 
 // Copy from kernel to user.
@@ -395,15 +388,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0) {
       va0 = PGROUNDDOWN(dstva);
-      uint64* pte = walk(pagetable, dstva, 0);
-      if((*pte & PTE_V) == 0 && (*pte & PTE_D) != 0 && (*pte & PTE_C) == 0) { //ako je na disku
-          int ret = handleevictedpage(pte);
-          if(ret == -1) return ret;
-      }
-      /*printf("%d ", *pte);
-      printf("%d ", pte);*/
-      pa0 = PTE2PA(*pte);
-
+      pa0 = walkaddr(pagetable, va0);
       if (pa0 == 0)
           return -1;
       n = PGSIZE - (dstva - va0);
@@ -413,7 +398,6 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
       len -= n;
       src += n;
       dstva = va0 + PGSIZE;
-      (*pte) &= ~PTE_D;
   }
   return 0;
 }

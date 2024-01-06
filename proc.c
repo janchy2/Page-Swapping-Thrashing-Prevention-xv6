@@ -259,13 +259,13 @@ userinit(void)
 int
 growproc(int n)
 {
-  //if(n > PHYSTOP - KERNBASE + SWAP_DISK_SIZE) return -1; //odmah se odbija ako je veci od memorijskog prostora i swap diska
+  if(n > PHYSTOP - KERNBASE + SWAP_DISK_SIZE) return -1; //odmah se odbija ako je veci od memorijskog prostora i swap diska
   uint64 sz;
   struct proc *p = myproc();
 
   sz = p->sz;
   if(n > 0){
-    if((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
+    if((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W|PTE_D)) == 0) { //dodala
       return -1;
     }
   } else if(n < 0){
@@ -283,9 +283,6 @@ fork(void)
   int i, pid;
   struct proc *np;
   struct proc *p = myproc();
-
-  extern int forkCount;
-  forkCount++;
 
   // Allocate process.
   if((np = allocproc()) == 0){

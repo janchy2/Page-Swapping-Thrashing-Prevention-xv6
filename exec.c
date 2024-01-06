@@ -63,9 +63,6 @@ exec(char *path, char **argv)
             goto bad;
         uint64 sz1;
         int flags = flags2perm(ph.flags);
-        /*if(!strncmp(p->name, "initcode", 9)) { //ako je u pitanju init proces!!!
-            flags |= PTE_C | PTE_D;
-        }*/
         if((sz1 = uvmalloc(pagetable, sz, ph.vaddr + ph.memsz, flags)) == 0)
             goto bad;
         sz = sz1;
@@ -84,7 +81,7 @@ exec(char *path, char **argv)
     // Use the second as the user stack.
     sz = PGROUNDUP(sz);
     uint64 sz1;
-    if((sz1 = uvmalloc(pagetable, sz, sz + 2*PGSIZE, PTE_W)) == 0) //dodala flag-ove
+    if((sz1 = uvmalloc(pagetable, sz, sz + 2*PGSIZE, PTE_W)) == 0)
         goto bad;
     sz = sz1;
     uvmclear(pagetable, sz-2*PGSIZE);

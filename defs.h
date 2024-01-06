@@ -74,6 +74,7 @@ void                    setptepointer(uint64*, uint64*);
 void                    updatereferencebits();
 int                     handleevictedpage(uint64*);
 int                     checkthrashing();
+void			        removeptepointer(uint64);
 
 // log.c
 void            initlog(int, struct superblock*);
@@ -200,8 +201,8 @@ void            virtio_disk_rw(int id, struct buf *, int, int);
 void            virtio_disk_intr(int id);
 void            write_block(int blockno, uchar* data, int busy_wait);
 void            read_block(int blockno, uchar* data, int busy_wait);
-int             getfreeblocknum();
-void            freeblock(int);
+uint32          getfreeblocknum();
+void            freeblock(uint32);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
