@@ -19,6 +19,7 @@ typedef struct framedesc {
     uint64 *pte;
     uint8 referencebits;
     uint8 isfree;
+    uint64 va; //sluzi za optimalniji flush TLB-a
 } framedesc;
 
 struct {
@@ -138,6 +139,14 @@ setptepointer(uint64* pte, uint64* frame) {
     release(&kmem.lock);
 }
 
+void
+setvirtualaddress(uint64 va, uint64* frame) {
+    uint64 index = ((uint64)frame - (uint64)kmem.frames) / PGSIZE;
+    acquire(&kmem.lock);
+    kmem.framedescs[index].va = va; //postavljanje pokazivaca na pte
+    release(&kmem.lock);
+}
+
 framedesc*
 choosevictimframe()
 {
@@ -192,7 +201,7 @@ evictpage(framedesc* desc)
             write_block(block, (uchar*)data, 0);
         block++;
     }
-    sfence_vma();
+    sfence_specific(desc->va); //uklanja TLB ulaze samo za datu virtuelnu adresu
     return 0;
 }
 
@@ -217,7 +226,6 @@ loadpage(framedesc* desc, uint64* pte)
     }
     uint64 flags = PTE_FLAGS(*pte);
     *pte = (PA2PTE(frame) | flags | PTE_V) & ~PTE_D; //ostave se isti flagovi samo se postavi V i skloni se D
-    //sfence_vma();
 }
 
 
@@ -230,7 +238,7 @@ handlepagefault(uint64 va)
     if((*pte & PTE_V) || !(*pte & PTE_D)) return -1; //nije u pitanju izbacena stranica
     if(!(*pte & PTE_U) && (*pte & PTE_D)) //dinamicko ucitavanje
     	return loadonrequest(pte);
-    return handleevictedpage(pte);
+    return handleevictedpage(pte, va);
 }
 
 void
@@ -252,7 +260,7 @@ updatereferencebits()
 }
 
 int
-handleevictedpage(uint64* pte) {
+handleevictedpage(uint64* pte, uint64 va) {
 
     framedesc* victim;
     uint64 newframe = (uint64)kalloc();
@@ -262,6 +270,7 @@ handleevictedpage(uint64* pte) {
     acquire(&kmem.lock);
     victim->pte = pte;
     victim->referencebits = 0x80;
+    victim->va = va;
     release(&kmem.lock);
 
     return 0;

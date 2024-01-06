@@ -121,7 +121,7 @@ walkaddr(pagetable_t pagetable, uint64 va)
   if(!(*pte & PTE_V) && !(*pte & PTE_D)) //ako nije ni na disku
       return 0;
   if(!(*pte & PTE_V) && (*pte & PTE_D) && (*pte & PTE_U)) { //ako je na disku
-      int ret = handleevictedpage(pte);
+      int ret = handleevictedpage(pte, va);
       if(ret == -1) return 0;
   }
   if(!(*pte & PTE_V) && (*pte & PTE_D) && !(*pte & PTE_U)) { //treba da se ucita dinamicki
@@ -175,6 +175,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 
     if(perm & PTE_U && set) { //samo za korisnicke stranice
         setptepointer(pte, (uint64*)pa); //postavlja se pokazivac na pte
+        setvirtualaddress(a, (uint64*)pa); //postavlja virtuelnu adresu
     }
     if(a == last)
       break;
@@ -357,7 +358,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if(!(*pte & PTE_V) && !(*pte & PTE_D))
       panic("uvmcopy: page not present");
     if(!(*pte & PTE_V) && (*pte & PTE_D)) {
-        int ret = handleevictedpage(pte);
+        int ret = handleevictedpage(pte, i);
         if(ret == -1) return ret;
         *pte |= PTE_D; //zakljucana da ne izbaci nju u kalloc
     }

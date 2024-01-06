@@ -72,11 +72,12 @@ void                    loadpage(struct framedesc*, uint64*);
 int                     handlepagefault(uint64);
 void                    setptepointer(uint64*, uint64*);
 void                    updatereferencebits();
-int                     handleevictedpage(uint64*);
+int                     handleevictedpage(uint64*, uint64);
 int                     checkthrashing();
 void			        removeptepointer(uint64);
 int			            loadonrequest(uint64*);
 void                    evictallpages(pagetable_t, uint64);
+void                    setvirtualaddress(uint64, uint64*);
 
 // log.c
 void            initlog(int, struct superblock*);
