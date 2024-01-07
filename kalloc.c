@@ -17,9 +17,10 @@ extern char end[]; // first address after kernel.
 
 typedef struct framedesc {
     uint64 *pte;
-    uint8 referencebits;
+    uint16 referencebits;
     uint8 isfree;
     uint64 va; //sluzi za optimalniji flush TLB-a
+    uint64 numofshared; //koliko procesa deli stranicu
 } framedesc;
 
 struct {
@@ -75,6 +76,7 @@ kfree(void *pa)
     kmem.framedescs[index].pte = 0;
     kmem.framedescs[index].referencebits = 0;
     kmem.framedescs[index].isfree = 1;
+    kmem.framedescs[index].numofshared = 0;
     release(&kmem.lock);
 }
 
@@ -102,6 +104,10 @@ kalloc(void)
     acquire(&kmem.lock);
     if(kmem.freeframes == 0) { //ako nema slobodnih okvira
         framedesc* victim = choosevictimframe();
+        if(!victim) {
+        	release(&kmem.lock);
+        	return 0;
+        }
         release(&kmem.lock);
         int ret = evictpage(victim); //mora da se oslobodi brava
         if(ret == -1) {
@@ -118,6 +124,7 @@ kalloc(void)
             if(kmem.framedescs[i].isfree) {
                 r = (char*)kmem.frames + i * PGSIZE;
                 kmem.framedescs[i].isfree = 0;
+                kmem.framedescs[i].numofshared = 1;
                 kmem.freeframes--;
                 break;
             }
@@ -150,13 +157,13 @@ setvirtualaddress(uint64 va, uint64* frame) {
 framedesc*
 choosevictimframe()
 {
-    uint8 min = 0xff;
+    uint16 min = 0xffff;
     framedesc *victim = 0;
-    framedesc* reserve = 0; // ako se desi da su sve ff
+    framedesc* reserve = 0; // ako se desi da su sve ffff
     for(uint64 i = 0; i < kmem.NUMFRAMES; i++) {
         if(kmem.framedescs[i].pte && !kmem.framedescs[i].isfree) {
             if(*(kmem.framedescs[i].pte) & PTE_U && *(kmem.framedescs[i].pte) & PTE_V) { //samo korisnicke stranice se izbacuju
-                if(!(*(kmem.framedescs[i].pte) & PTE_D)) { //samo ako je u memoriji
+                if(!(*(kmem.framedescs[i].pte) & PTE_D) && !(*(kmem.framedescs[i].pte) & PTE_C)) { //samo ako je u memoriji
                     reserve = &kmem.framedescs[i];
                     if (kmem.framedescs[i].referencebits < min) {
                         victim = &kmem.framedescs[i];
@@ -167,6 +174,7 @@ choosevictimframe()
         }
     }
     if(!victim) victim = reserve;
+    if(!victim) return 0;
     *(victim->pte) |= PTE_D; //postavimo da je izbacena (ne moze neki drugi proces da je izabere u medjuvremenu)
     *(victim->pte) &= ~PTE_V; //nije validna
     return victim;
@@ -176,18 +184,18 @@ int
 evictpage(framedesc* desc)
 {
     uint32 block = getfreeblocknum();
-    if(block == 0xffffffff) {
+    uint64 pa = PTE2PA(*(desc->pte));
+    if(block == 0xffffffff || ((pa % PGSIZE) != 0 || (char*)pa < end || pa >= PHYSTOP) ) {
         *(desc->pte) &= ~PTE_D; //nije izbacena
         *(desc->pte) |= PTE_V; //validna
         return -1;
     }
 
-    uint64 pa = PTE2PA(*(desc->pte));
     uint64 mask = ~(0xffffffffff << 10); //mora da se ukloni fizicka adresa okvira iz pte
     *(desc->pte) &= mask;
     *(desc->pte) |= (block << 10); //umesto fizicke adrese je upisan broj bloka
-    desc->referencebits = 0x80; //resetuje se jer ce nova stranica da se mapira u njega
-    //80 da ne bi odmah bila izbacena ponovo
+    desc->referencebits = 0x8000; //resetuje se jer ce nova stranica da se mapira u njega
+    //8000 da ne bi odmah bila izbacena ponovo
     uchar data[1024];
     uchar* frameaddr = (uchar*)pa;
     for(int i = 0; i < 4; i++) {
@@ -235,10 +243,13 @@ handlepagefault(uint64 va)
     pagetable_t pagetable = myproc()->pagetable;
     uint64* pte = walk(pagetable, va, 0);
     if(pte == 0) return -1; //greska
-    if((*pte & PTE_V) || !(*pte & PTE_D)) return -1; //nije u pitanju izbacena stranica
+    if((*pte & PTE_V) && !(*pte & PTE_C)) return -1; //greska
+    if(!(*pte & PTE_D)) return -1; //greska
     if(!(*pte & PTE_U) && (*pte & PTE_D)) //dinamicko ucitavanje
-    	return loadonrequest(pte);
-    return handleevictedpage(pte, va);
+    	return loadonrequest(pte, va);
+    if((*pte & PTE_C) && !(*pte & PTE_W)) //copy on write
+    	return copyonwrite(pte, va);
+    return handleevictedpage(pte, va); //izbacena stranica
 }
 
 void
@@ -250,7 +261,7 @@ updatereferencebits()
                 if (!(*(kmem.framedescs[i].pte) & PTE_D)) { //samo ako je u memoriji
                     kmem.framedescs[i].referencebits >>= 1;
                     if ((*(kmem.framedescs[i].pte) & PTE_A)) { // ako je stranici pristupano
-                        kmem.framedescs[i].referencebits |= (1 << 7);
+                        kmem.framedescs[i].referencebits |= (1 << 15);
                         *(kmem.framedescs[i].pte) &= ~PTE_A;
                     }
                 }
@@ -264,12 +275,13 @@ handleevictedpage(uint64* pte, uint64 va) {
 
     framedesc* victim;
     uint64 newframe = (uint64)kalloc();
+    if(!newframe) return -1;
     uint64 index = (newframe - (uint64)kmem.frames) / PGSIZE;
     victim = &kmem.framedescs[index];
     loadpage(victim, pte);
     acquire(&kmem.lock);
     victim->pte = pte;
-    victim->referencebits = 0x80;
+    victim->referencebits = 0x8000;
     victim->va = va;
     release(&kmem.lock);
 
@@ -277,12 +289,13 @@ handleevictedpage(uint64* pte, uint64 va) {
 }
 
 int
-loadonrequest(uint64* pte) {
+loadonrequest(uint64* pte, uint64 va) {
 	char* mem = kalloc();
 	if(mem == 0) return -1;
 	*pte |= PA2PTE(mem) | PTE_U | PTE_V;
 	*pte &= ~PTE_D;
 	setptepointer(pte, (uint64*)mem);
+	setvirtualaddress(va, (uint64*)mem);
 	return 0;
 }
 
@@ -296,15 +309,23 @@ checkthrashing() {
                     if ((*(kmem.framedescs[i].pte) & PTE_A)) { // ako je stranici pristupano
                         numofaccessed++;
                     }
-                    else if(kmem.framedescs[i].referencebits & 0xff) {
-                        //ako je stranici uopste pristupano u poslednjih osam update perioda
+                    else if(kmem.framedescs[i].referencebits & 0xffff) {
+                        //ako je stranici uopste pristupano u poslednjih sesnaest update perioda
                         numofaccessed++;
                     }
                 }
             }
         }
     }
-    if(numofaccessed > kmem.NUMFRAMES) return 1;
+    
+   if(numofaccessed > kmem.NUMFRAMES) return 1;
+   return 0;
+}
+
+int
+hasptepointer(uint64 pa) {
+    uint64 index = (pa - (uint64)kmem.frames) / PGSIZE; //ne treba lock jer se zove samo iz fork-a
+    if(kmem.framedescs[index].pte) return 1;
     return 0;
 }
 
@@ -335,8 +356,43 @@ evictallpages(pagetable_t pagetable, uint64 sz) {
                 }
                 kmem.framedescs[index].pte = 0;
                 kmem.framedescs[index].isfree = 1;
+                kmem.freeframes++;
             }
             release(&kmem.lock);
         }
     }
+}
+
+void
+incnumofshared(uint64 pa) {
+    uint64 index = (pa - (uint64)kmem.frames) / PGSIZE; //ne treba lock jer se zove samo iz fork-a
+    kmem.framedescs[index].numofshared++;
+}
+
+void
+decnumofshared(uint64 pa) {
+    acquire(&kmem.lock);
+    uint64 index = (pa - (uint64)kmem.frames) / PGSIZE;
+    kmem.framedescs[index].numofshared--;
+    if(kmem.framedescs[index].numofshared == 1) { //samo jedan proces drzi okvir
+    	*(kmem.framedescs[index].pte) |= PTE_W;
+    	*(kmem.framedescs[index].pte) &= ~PTE_C;
+    	*(kmem.framedescs[index].pte) &= ~PTE_D;
+    }
+    release(&kmem.lock);
+}
+
+int
+copyonwrite(uint64* pte, uint64 va) {
+    char* mem = kalloc();
+    if(mem == 0) return -1;
+    uint64 pa = PTE2PA(*pte);
+    decnumofshared(pa);
+    *pte |= PA2PTE(mem) | PTE_W;
+    *pte &= ~PTE_C;
+    *pte &= ~PTE_D;
+    setptepointer(pte, (uint64*)mem);
+    setvirtualaddress(va, (uint64*)mem);
+    sfence_specific(va);
+    return 0;
 }
