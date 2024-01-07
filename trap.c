@@ -185,7 +185,7 @@ clockintr()
   release(&tickslock);
 
   thrashingticks++;
-  if(thrashingticks == 32) {
+  if(thrashingticks == 64) {
       int isthrasing = checkthrashing();
       if(isthrasing) {
           procswapout();
@@ -199,7 +199,7 @@ clockintr()
   }
 
   refupdateticks++;
-  if(refupdateticks == 8) { //na svakih 8 perioda tajmera se azuriraju registri referenciranja
+  if(refupdateticks == 4) { //na svake 4 periode tajmera se azuriraju registri referenciranja
       updatereferencebits();
       refupdateticks = 0;
   }
@@ -256,4 +256,3 @@ devintr()
     return 0;
   }
 }
-
