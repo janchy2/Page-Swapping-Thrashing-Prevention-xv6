@@ -74,10 +74,14 @@ void                    setptepointer(uint64*, uint64*);
 void                    updatereferencebits();
 int                     handleevictedpage(uint64*, uint64);
 int                     checkthrashing();
-void			        removeptepointer(uint64);
-int			            loadonrequest(uint64*);
+void			              removeptepointer(uint64);
+int			                loadonrequest(uint64*, uint64);
 void                    evictallpages(pagetable_t, uint64);
 void                    setvirtualaddress(uint64, uint64*);
+int                     hasptepointer(uint64);
+void			              incnumofshared(uint64);
+void			              decnumofshared(uint64);
+int			                copyonwrite(uint64*, uint64);
 
 // log.c
 void            initlog(int, struct superblock*);
@@ -124,8 +128,8 @@ int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
 void            procswapout();
 void            procswapin();
-void		    setnoyield(int);
-int 		    isfork();
+void		        setnoyield(int);
+int 		        isfork();
 void            setisfork(int);
 
 // swtch.S
