@@ -125,7 +125,7 @@ walkaddr(pagetable_t pagetable, uint64 va)
       if(ret == -1) return 0;
   }
   if(!(*pte & PTE_V) && (*pte & PTE_D) && !(*pte & PTE_U)) { //treba da se ucita dinamicki
-  	int ret = loadonrequest(pte);
+  	int ret = loadonrequest(pte, va);
   	if(ret == -1) return 0;
   }
   pa = PTE2PA(*pte);
@@ -163,13 +163,13 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if(*pte & PTE_V)
       panic("mappages: remap");
     int set = 0;
-    if(perm & PTE_D && perm & PTE_U) { //ako nije dinamicko ucitavanje
+    if(perm & PTE_D && perm & PTE_U && !(perm & PTE_C)) { //ako nije dinamicko ucitavanje ni copy on write
     	set = 1;
     	perm &= ~PTE_D;
     }
     *pte = PA2PTE(pa) | perm | PTE_V;
     
-    if(*pte & PTE_D) { //ako jeste dinamicko ucitavanje
+    if(*pte & PTE_D && !(perm & PTE_U)) { //ako jeste dinamicko ucitavanje
     	*pte &= ~PTE_V;
     }
 
@@ -216,7 +216,11 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
         uint32 blockno = (*pte) >> 10;
         freeblock(blockno);
     }
-    else if(*pte & PTE_U){
+    else if(do_free && (*pte & PTE_C)) { //deljena
+    	uint64 pa = PTE2PA(*pte);
+    	decnumofshared(pa);
+    }
+    else if(*pte & PTE_U){ //ne oslobadja se memorija
         uint64 pa = PTE2PA(*pte);
         removeptepointer(pa);
     }
@@ -360,22 +364,34 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if(!(*pte & PTE_V) && (*pte & PTE_D)) {
         int ret = handleevictedpage(pte, i);
         if(ret == -1) return ret;
-        *pte |= PTE_D; //zakljucana da ne izbaci nju u kalloc
     }
-    if((mem = kalloc()) == 0)
-        goto err;
-    
-    if(*pte & PTE_U) //ako je ucitana
-    	*pte &= ~PTE_D;
-    pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
 
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-        kfree(mem);
-        goto err;
+    pa = PTE2PA(*pte);
+
+    if(hasptepointer(pa)) { //moze copy on write
+        if(*pte & PTE_W)
+            *pte &= ~PTE_W;
+        *pte |= PTE_C;
+        *pte |= PTE_D; //da ne bi bila izbacena
+        incnumofshared(pa);
+        flags = PTE_FLAGS(*pte);
+        if(mappages(new, i, PGSIZE, pa, flags) != 0) {
+            goto err;
+        }
     }
+    else {
+        if((mem = kalloc()) == 0)
+            goto err;
+	flags = PTE_FLAGS(*pte);
+        memmove(mem, (char*)pa, PGSIZE);
+        if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+            kfree(mem);
+            goto err;
+        }
+    }
+
   }
+
   return 0;
 
   err:
