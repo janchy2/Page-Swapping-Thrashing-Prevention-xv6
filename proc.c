@@ -297,6 +297,7 @@ fork(void)
     mycpu()->isFork = 0;
     return -1;
   }
+  mycpu()->isFork = 0;
   np->sz = p->sz;
 
   // copy saved user registers.
