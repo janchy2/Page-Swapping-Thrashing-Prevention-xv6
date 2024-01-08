@@ -80,7 +80,7 @@ void                    evictallpages(pagetable_t, uint64);
 void                    setvirtualaddress(uint64, uint64*);
 int                     hasptepointer(uint64);
 void			              incnumofshared(uint64);
-void			              decnumofshared(uint64);
+int  			              decnumofshared(uint64);
 int			                copyonwrite(uint64*, uint64);
 
 // log.c
