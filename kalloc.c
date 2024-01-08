@@ -325,8 +325,13 @@ checkthrashing() {
 
 int
 hasptepointer(uint64 pa) {
-    uint64 index = (pa - (uint64)kmem.frames) / PGSIZE; //ne treba lock jer se zove samo iz fork-a
-    if(kmem.framedescs[index].pte) return 1;
+    acquire(&kmem.lock);
+    uint64 index = (pa - (uint64)kmem.frames) / PGSIZE;
+    if(kmem.framedescs[index].pte) {
+    	release(&kmem.lock);
+    	return 1;
+    }
+    release(&kmem.lock);
     return 0;
 }
 
@@ -366,8 +371,10 @@ evictallpages(pagetable_t pagetable, uint64 sz) {
 
 void
 incnumofshared(uint64 pa) {
-    uint64 index = (pa - (uint64)kmem.frames) / PGSIZE; //ne treba lock jer se zove samo iz fork-a
+    acquire(&kmem.lock);
+    uint64 index = (pa - (uint64)kmem.frames) / PGSIZE;
     kmem.framedescs[index].numofshared++;
+    release(&kmem.lock);
 }
 
 int
