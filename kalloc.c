@@ -203,10 +203,10 @@ evictpage(framedesc* desc)
             data[j] = *frameaddr; //sadrzaj okvira se upisuje u bafer
             frameaddr++;
         }
-        if(isfork()) //ako je fork mora busywait
+        //if(isfork()) //ako je fork mora busywait
             write_block(block, (uchar*)data, 1);
-        else
-            write_block(block, (uchar*)data, 0);
+        //else
+           // write_block(block, (uchar*)data, 0);
         block++;
     }
     sfence_specific(desc->va); //uklanja TLB ulaze samo za datu virtuelnu adresu
@@ -222,10 +222,10 @@ loadpage(framedesc* desc, uint64* pte)
     uchar* frameaddr = (uchar*)getframeaddr(desc);
     uint64 frame = (uint64)frameaddr; //cuvamo da bismo upisali u pte
     for(int i = 0; i < 4; i++) {
-        if(isfork()) //ako je fork mora busywait
+        //if(isfork()) //ako je fork mora busywait
             read_block(block, (uchar*)data, 1);
-        else
-            read_block(block, (uchar*)data, 0);
+        //else
+            //read_block(block, (uchar*)data, 0);
         for(int j = 0; j < 1024; j++) {
             *frameaddr = data[j]; //sadrzaj okvira se upisuje u bafer
             frameaddr++;
@@ -283,6 +283,7 @@ handleevictedpage(uint64* pte, uint64 va) {
     victim->pte = pte;
     victim->referencebits = 0x8000;
     victim->va = va;
+    victim->numofshared = 1;
     release(&kmem.lock);
 
     return 0;
@@ -369,26 +370,33 @@ incnumofshared(uint64 pa) {
     kmem.framedescs[index].numofshared++;
 }
 
-void
+int
 decnumofshared(uint64 pa) {
     acquire(&kmem.lock);
     uint64 index = (pa - (uint64)kmem.frames) / PGSIZE;
     kmem.framedescs[index].numofshared--;
-    if(kmem.framedescs[index].numofshared == 1) { //samo jedan proces drzi okvir
+    if(kmem.framedescs[index].numofshared == 1) {
+    //samo jedan proces drzi okvir (moze da pokazuje na onaj koji je izazvao pf, tako da ce drugi svakako izazvati jos jedan)
     	*(kmem.framedescs[index].pte) |= PTE_W;
     	*(kmem.framedescs[index].pte) &= ~PTE_C;
     	*(kmem.framedescs[index].pte) &= ~PTE_D;
     }
     release(&kmem.lock);
+    return kmem.framedescs[index].numofshared == 0;
 }
 
 int
 copyonwrite(uint64* pte, uint64 va) {
-    char* mem = kalloc();
-    if(mem == 0) return -1;
     uint64 pa = PTE2PA(*pte);
-    decnumofshared(pa);
-    *pte |= PA2PTE(mem) | PTE_W;
+    int num = decnumofshared(pa);
+    char* mem;
+    if(!num) { //ako nije jedini proces koji drzi okvir
+    	mem = kalloc();
+    	if(mem == 0) return -1;
+    }
+    else mem = (char*) pa;
+    uint64 flags = PTE_FLAGS(*pte);
+    *pte = PA2PTE(mem) | PTE_W | flags;
     *pte &= ~PTE_C;
     *pte &= ~PTE_D;
     setptepointer(pte, (uint64*)mem);
