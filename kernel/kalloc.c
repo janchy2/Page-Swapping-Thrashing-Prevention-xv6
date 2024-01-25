@@ -152,7 +152,7 @@ void
 setvirtualaddress(uint64 va, uint64* frame) {
     uint64 index = ((uint64)frame - (uint64)kmem.frames) / PGSIZE;
     acquire(&kmem.lock);
-    kmem.framedescs[index].va = va; //postavljanje pokazivaca na pte
+    kmem.framedescs[index].va = va; //postavljanje virtuelne adrese
     release(&kmem.lock);
 }
 
